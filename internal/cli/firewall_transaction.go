@@ -8,6 +8,18 @@ import (
 	"time"
 )
 
+// DNS coordination may have committed a newer ownership manifest while the
+// firewall transaction was open. Only replace the fields owned by this step.
+func finishFirewallChange(p paths, bindings []platform.Binding) error {
+	m, err := loadHost(p)
+	if err != nil {
+		return err
+	}
+	m.Firewall = bindings
+	m.PendingFirewall = nil
+	return saveHost(p, m)
+}
+
 func reconcileFirewall(ctx context.Context, p paths, m hostManifest, c model.Config) (hostManifest, error) {
 	f := platform.Firewall{}
 	known := m.Firewall
@@ -55,9 +67,7 @@ func beginFirewallChange(ctx context.Context, p paths, old, next model.Config) (
 		if e := f.Remove(cleanup, added); e != nil {
 			return e
 		}
-		m.Firewall = before
-		m.PendingFirewall = nil
-		return saveHost(p, m)
+		return finishFirewallChange(p, before)
 	}
 	if e = f.Apply(ctx, added); e != nil {
 		return nil, nil, errors.Join(e, abort())
@@ -68,9 +78,7 @@ func beginFirewallChange(ctx context.Context, p paths, old, next model.Config) (
 		if e := f.Remove(cleanup, removed); e != nil {
 			return e
 		}
-		m.Firewall = after
-		m.PendingFirewall = nil
-		return saveHost(p, m)
+		return finishFirewallChange(p, after)
 	}
 	return commit, abort, nil
 }

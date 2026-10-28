@@ -1,0 +1,73 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      NODEKIT_BUILD_ROOT: ${{ github.workspace }}/build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Validate version and test
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          bash scripts/build.sh test ./...
+          bash scripts/build.sh vet ./...
+          CGO_ENABLED=1 bash scripts/build.sh test -race ./...
+          shellcheck install.sh scripts/*.sh
+          python3 scripts/test-export-public.py
+      - name: Build both architectures and collect sources
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          bash scripts/package.sh "$VERSION"
+          python3 scripts/export-public.py build/public
+          tar -czf "build/dist/nodekit-$VERSION-source.tar.gz" -C build/public .
+          bash scripts/build.sh mod download
+          tar -czf build/dist/nodekit-dependencies.tar.gz --exclude=cache -C build/modules .
+          curl -fLsS --proto '=https' --proto-redir '=https' https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.33.tar.gz -o build/dist/mihomo-v1.19.33-source.tar.gz
+          tar -xOf build/dist/mihomo-v1.19.33-source.tar.gz mihomo-1.19.33/LICENSE > build/dist/mihomo-LICENSE
+          cp install.sh LICENSE THIRD_PARTY_NOTICES.md build/dist/
+          cp "$(go env GOROOT)/LICENSE" build/dist/Go-LICENSE
+          cd build/dist
+          sha256sum -- nodekit-*.tar.gz mihomo-*.tar.gz install.sh LICENSE *-LICENSE THIRD_PARTY_NOTICES.md > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Verify native packaged core
+        run: |
+          mkdir build/native
+          tar -xzf "build/dist/nodekit-${GITHUB_REF_NAME}-linux-amd64.tar.gz" -C build/native
+          NODEKIT_CORE_BIN="$PWD/build/native/mihomo" bash scripts/build.sh test ./...
+          bash scripts/verify-units.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: build/dist/*
+          if-no-files-found: error
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          gh release create "$VERSION" dist/* --repo "$REPO" --verify-tag --title "NodeKit $VERSION" --notes '包含双架构包、校验和、安装器、对应源码和第三方许可证。安装：bash install.sh --repo OWNER/REPO。'

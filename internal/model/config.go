@@ -21,6 +21,7 @@ type Protocol struct {
 	Port     int    `json:"port"`
 	Password string `json:"password"`
 	UUID     string `json:"uuid"`
+	Name     string `json:"name,omitempty"`
 }
 type Reality struct {
 	PrivateKey string `json:"private_key"`
@@ -33,6 +34,9 @@ type Config struct {
 	Schema           int        `json:"schema"`
 	Revision         int64      `json:"revision"`
 	Name             string     `json:"name"`
+	DisplayMode      string     `json:"display_mode,omitempty"`
+	CountryCode      string     `json:"country_code,omitempty"`
+	ManagedDNS       bool       `json:"managed_dns,omitempty"`
 	Domain           string     `json:"domain"`
 	Address          string     `json:"address"`
 	IPv6             bool       `json:"ipv6"`
@@ -78,7 +82,7 @@ func New() (Config, error) {
 	if _, e = rand.Read(short); e != nil {
 		return c, e
 	}
-	c.Reality = Reality{base64.RawURLEncoding.EncodeToString(key.Bytes()), base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes()), hex.EncodeToString(short), "www.microsoft.com", "www.microsoft.com:443"}
+	c.Reality = Reality{base64.RawURLEncoding.EncodeToString(key.Bytes()), base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes()), hex.EncodeToString(short), "addons.mozilla.org", "addons.mozilla.org:443"}
 	for i, typ := range []string{"vless", "ss", "tuic", "hysteria2", "anytls"} {
 		b := make([]byte, 16)
 		if _, e = rand.Read(b); e != nil {
@@ -98,7 +102,7 @@ func New() (Config, error) {
 			}
 			password = base64.StdEncoding.EncodeToString(b)
 		}
-		c.Protocols = append(c.Protocols, Protocol{typ, true, 24441 + i, password, id})
+		c.Protocols = append(c.Protocols, Protocol{Type: typ, Enabled: true, Port: 24441 + i, Password: password, UUID: id})
 	}
 	return c, nil
 }
@@ -119,6 +123,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Name) == "" || len(c.Name) > 128 || strings.ContainsAny(c.Name, "\r\n\x00") {
 		return errors.New("invalid name")
+	}
+	if e := c.validateDisplay(); e != nil {
+		return e
 	}
 	if !ValidDomain(c.Domain) {
 		return errors.New("invalid domain")
@@ -188,14 +195,10 @@ func (c Config) Validate() error {
 	if e != nil || len(id) == 0 || len(id) > 8 {
 		return errors.New("invalid REALITY short ID")
 	}
-	if !ValidDomain(c.Reality.ServerName) {
+	if !ValidDomain(c.Reality.ServerName) || net.ParseIP(c.Reality.ServerName) != nil {
 		return errors.New("invalid REALITY SNI")
 	}
-	host, port, e := net.SplitHostPort(c.Reality.Target)
-	if e != nil || host == "" || port == "" {
-		return errors.New("invalid REALITY target")
-	}
-	return nil
+	return ValidateRealityTarget(c.Reality.Target)
 }
 func ParseBytes(s string) (int64, error) {
 	units := map[string]int64{"GB": 1000000000, "TB": 1000000000000, "GiB": 1073741824, "TiB": 1099511627776}

@@ -38,6 +38,9 @@ func TestCloudflareCLIEditingAndMenu(t *testing.T) {
 	defer db.Close()
 	c, _ := model.New()
 	c.Address = "8.8.8.8"
+	// The synthetic admin fixture already owns a compatible subscription port;
+	// no new bind is needed on hosts also running a production NodeKit instance.
+	c.SubscriptionPort = 8443
 	if err = db.Update(func(r *store.Record) error { r.Config = c; r.Meter.Upload = 123; return nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +89,9 @@ func TestCloudflareCLIEditingAndMenu(t *testing.T) {
 			active := c.Clone()
 			active.SubscriptionMode = "cloudflare"
 			active.SubscriptionPort = 8443
+			active.DisplayMode = "flag-host"
+			active.CountryCode = "JP"
+			active.Protocols[0].Name = "old override"
 			if err := db.Update(func(r *store.Record) error { r.Config = active; return nil }); err != nil {
 				t.Fatal(err)
 			}
@@ -106,6 +112,9 @@ func TestCloudflareCLIEditingAndMenu(t *testing.T) {
 			}
 			if record.Config.EffectiveSubscriptionMode() != "direct" || record.Config.NodeAddress() != c.Domain || record.Config.SubscriptionPort != port {
 				t.Fatal("legacy import inherited active mode")
+			}
+			if record.Config.NodeName(record.Config.Protocols[0]) != "NodeKit-vless" {
+				t.Fatal("legacy import inherited new display fields")
 			}
 		})
 	}

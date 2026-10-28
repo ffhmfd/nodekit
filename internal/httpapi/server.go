@@ -124,7 +124,12 @@ func Admin(b Backend) http.Handler {
 				return
 			}
 			w.WriteHeader(204)
-		case "PUT /config":
+		case "PUT /config", "PUT /config/managed":
+			coordinated := r.URL.Path == "/config/managed"
+			if coordinated && !RootPeer(r.Context()) {
+				http.Error(w, "root Unix peer required", 403)
+				return
+			}
 			var c model.Config
 			dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 			dec.DisallowUnknownFields()
@@ -136,7 +141,18 @@ func Admin(b Backend) http.Handler {
 				http.Error(w, e.Error(), 400)
 				return
 			}
-			if e := b.Change(r.Context(), c); e != nil {
+			change := b.Change
+			if coordinated {
+				manager, ok := b.(interface {
+					ChangeManaged(context.Context, model.Config) error
+				})
+				if !ok {
+					http.Error(w, "DNS coordination unavailable", 503)
+					return
+				}
+				change = manager.ChangeManaged
+			}
+			if e := change(r.Context(), c); e != nil {
 				http.Error(w, e.Error(), 409)
 				return
 			}

@@ -35,7 +35,25 @@ type managedBackend struct {
 func (b managedBackend) Renew(ctx context.Context, domain string) error {
 	return b.certificates.Renew(ctx, domain)
 }
+
+func (b managedBackend) ChangeManaged(ctx context.Context, c model.Config) error {
+	r, err := b.Manager.View(ctx)
+	if err != nil {
+		return err
+	}
+	if r.Config.Domain != c.Domain {
+		return b.certificates.RenewConfig(ctx, c)
+	}
+	return b.Manager.ChangeManaged(ctx, c)
+}
+
 func (c *certificateController) Renew(ctx context.Context, domain string) error {
+	return c.renew(ctx, domain, nil)
+}
+func (c *certificateController) RenewConfig(ctx context.Context, next model.Config) error {
+	return c.renew(ctx, next.Domain, &next)
+}
+func (c *certificateController) renew(ctx context.Context, domain string, candidate *model.Config) error {
 	if !c.mu.TryLock() {
 		return errors.New("certificate renewal already running")
 	}
@@ -51,11 +69,23 @@ func (c *certificateController) Renew(ctx context.Context, domain string) error 
 	if domain == "" {
 		domain = originalDomain
 	}
+	validation := r.Config
+	if candidate != nil {
+		if e = candidate.Validate(); e != nil {
+			return e
+		}
+		if candidate.Revision != r.Config.Revision {
+			return errors.New("stale configuration revision")
+		}
+		validation = *candidate
+	} else if r.Config.ManagedDNS && domain != originalDomain {
+		return errors.New("managed domain changes require the root DNS coordinator")
+	}
 	if !model.ValidDomain(domain) {
 		return errors.New("invalid certificate domain")
 	}
 	if domain != originalDomain {
-		if e = validateDomainAddress(ctx, r.Config.EffectiveSubscriptionMode(), domain, r.Config.Address, net.DefaultResolver.LookupIPAddr); e != nil {
+		if e = validateDomainAddress(ctx, validation.EffectiveSubscriptionMode(), domain, validation.Address, net.DefaultResolver.LookupIPAddr); e != nil {
 			return e
 		}
 	}
@@ -95,14 +125,30 @@ func (c *certificateController) Renew(ctx context.Context, domain string) error 
 	if latest.Config.Domain != originalDomain || latest.Config.EffectiveSubscriptionMode() != r.Config.EffectiveSubscriptionMode() || latest.Config.Address != r.Config.Address {
 		return failure(errors.New("domain, subscription mode or address changed during issuance; retry with current configuration"))
 	}
+	if candidate != nil && latest.Config.Revision != candidate.Revision {
+		return failure(errors.New("configuration changed during coordinated issuance"))
+	}
 	id, e := cert.Store(filepath.Join(c.paths.Data, "certs"), bundle, domain, time.Now())
 	if e != nil {
 		return failure(e)
 	}
 	oldID := latest.Config.CertID
+	if candidate != nil {
+		latest.Config = candidate.Clone()
+	}
 	latest.Config.Domain = domain
 	latest.Config.CertID = id
-	if e = c.backend.Change(ctx, latest.Config); e != nil {
+	change := c.backend.Change
+	if candidate != nil {
+		managed, ok := c.backend.(interface {
+			ChangeManaged(context.Context, model.Config) error
+		})
+		if !ok {
+			return failure(errors.New("DNS coordination unavailable"))
+		}
+		change = managed.ChangeManaged
+	}
+	if e = change(ctx, latest.Config); e != nil {
 		return failure(e)
 	}
 	if e = c.db.Update(func(r *store.Record) error {

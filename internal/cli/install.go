@@ -55,6 +55,9 @@ func installPackage(ctx context.Context, p paths, args []string, out io.Writer) 
 		return e
 	}
 	defer os.RemoveAll(stage)
+	if e = checkRetainedCompatibility(ctx, p, filepath.Join(stage, "nodekit")); e != nil {
+		return e
+	}
 	target := "releases/" + meta.Version + "-" + (*sha)[:12]
 	alreadyInstalled := false
 	if old, e := os.Readlink(filepath.Join(p.Opt, "current")); e == nil {
@@ -128,6 +131,9 @@ func resume(ctx context.Context, p paths) error {
 	if e != nil {
 		return e
 	}
+	if m.PurgePhase != "" {
+		return errors.New("purge is incomplete; resume uninstall --purge")
+	}
 	if e = verifyAccount(p, m); e != nil {
 		return e
 	}
@@ -136,6 +142,15 @@ func resume(ctx context.Context, p paths) error {
 	}
 	if e = preparePermissions(p, m); e != nil {
 		return e
+	}
+	if m.DNSOperation != nil {
+		client, err := dnsClient(p)
+		if err != nil {
+			return err
+		}
+		if err = recoverDNS(ctx, p, &m, client); err != nil {
+			return err
+		}
 	}
 	c, e := serviceConfig(ctx, p)
 	if e != nil {

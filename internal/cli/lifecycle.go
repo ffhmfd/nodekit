@@ -12,6 +12,7 @@ import (
 	"nodekit/internal/core"
 	"nodekit/internal/model"
 	"nodekit/internal/platform"
+	"nodekit/internal/store"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,7 +85,10 @@ func switchLink(base, name, target string) error {
 	return d.Sync()
 }
 
-type upgradeJournal struct{ Old, New, Previous, Phase string }
+type upgradeJournal struct {
+	Old, New, Previous, Phase string
+	Config                    *model.Config `json:"config,omitempty"`
+}
 
 func lifecycleDir(p paths) string { return filepath.Join(p.Etc, "lifecycle") }
 func writeJournal(p paths, j upgradeJournal) error {
@@ -123,11 +127,71 @@ func clearJournal(p paths) error {
 	return nil
 }
 func serviceTool(ctx context.Context, p paths, command string) ([]byte, error) {
-	b, e := platform.Exec(ctx, "runuser", "-u", "nodekit", "--", filepath.Join(p.Opt, "previous/nodekit"), command)
+	var c model.Config
+	j, err := readJournal(p)
+	if err == nil {
+		c, err = recoveryConfig(ctx, p, j)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		c, err = serviceConfig(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+	}
+	binary, err := serviceBinary(ctx, p, c)
+	if err != nil {
+		return nil, err
+	}
+	b, e := platform.Exec(ctx, "runuser", "-u", "nodekit", "--", binary, command)
 	if e != nil {
 		return nil, fmt.Errorf("service-identity %s failed", command)
 	}
 	return b, nil
+}
+
+func recoveryConfig(ctx context.Context, p paths, j upgradeJournal) (model.Config, error) {
+	if j.Config != nil {
+		return j.Config.Clone(), j.Config.Validate()
+	}
+	var c model.Config
+	if j.Phase == "prepared" {
+		b, err := platform.Exec(ctx, "runuser", "-u", "nodekit", "--", filepath.Join(p.Opt, j.Old, "nodekit"), "inspect")
+		if err != nil {
+			return c, errors.New("cannot inspect old release for recovery")
+		}
+		if err = json.Unmarshal(b, &c); err != nil {
+			return c, err
+		}
+		return c, c.Validate()
+	}
+	data, err := platform.ReadPrivate(filepath.Join(lifecycleDir(p), "state.db"))
+	if err != nil {
+		return c, err
+	}
+	dir, err := os.MkdirTemp(lifecycleDir(p), ".inspect-")
+	if err != nil {
+		return c, err
+	}
+	defer os.RemoveAll(dir)
+	file := filepath.Join(dir, "state.db")
+	if err = os.WriteFile(file, data, 0600); err != nil {
+		return c, err
+	}
+	db, err := store.Open(file)
+	if err != nil {
+		return c, err
+	}
+	defer db.Close()
+	r, err := db.Load()
+	if err != nil {
+		return c, err
+	}
+	return r.Config, r.Config.Validate()
 }
 func recoverUpgrade(ctx context.Context, p paths, boot bool) error {
 	j, e := readJournal(p)
@@ -149,6 +213,16 @@ func recoverUpgrade(ctx context.Context, p paths, boot bool) error {
 	}
 	if j.Phase == "committed" {
 		return clearJournal(p)
+	}
+	if m.PurgePhase != "" || m.DNSOperation != nil {
+		return errors.New("finish pending DNS/purge before upgrade recovery")
+	}
+	config, e := recoveryConfig(ctx, p, j)
+	if e != nil {
+		return e
+	}
+	if e = checkReleaseCompatibility(ctx, config, filepath.Join(p.Opt, j.Old, "nodekit"), hostFeatures(m)...); e != nil {
+		return e
 	}
 	if boot {
 		if _, e = platform.Exec(ctx, "systemctl", "stop", "nodekit-manager.service"); e != nil {
@@ -246,6 +320,9 @@ func releaseCommand(ctx context.Context, p paths, args []string, out io.Writer) 
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return e
 	}
+	if m.PurgePhase != "" || m.DNSOperation != nil {
+		return errors.New("finish pending DNS/purge operation before changing releases")
+	}
 	if e = owned(p.Opt); e != nil {
 		return e
 	}
@@ -299,11 +376,11 @@ func releaseCommand(ctx context.Context, p paths, args []string, out io.Writer) 
 	if e != nil {
 		return e
 	}
-	if e = checkReleaseCompatibility(ctx, config, filepath.Join(p.Opt, target, "nodekit")); e != nil {
+	if e = checkReleaseCompatibility(ctx, config, filepath.Join(p.Opt, target, "nodekit"), hostFeatures(m)...); e != nil {
 		return e
 	}
 	_ = p.admin(ctx, "POST", "/usage/flush", nil, nil)
-	j := upgradeJournal{Old: old, New: target, Previous: previous, Phase: "prepared"}
+	j := upgradeJournal{Old: old, New: target, Previous: previous, Phase: "prepared", Config: &config}
 	if e = writeJournal(p, j); e != nil {
 		return e
 	}
@@ -356,6 +433,9 @@ func releaseCommand(ctx context.Context, p paths, args []string, out io.Writer) 
 	return pruneReleases(p)
 }
 func uninstall(ctx context.Context, p paths, purge bool, out io.Writer) error {
+	if purge {
+		return purgeCommand(ctx, p, out)
+	}
 	if p.Root != "/" || os.Geteuid() != 0 {
 		return errors.New("卸载需真实系统 root")
 	}
@@ -378,15 +458,6 @@ func uninstall(ctx context.Context, p paths, purge bool, out io.Writer) error {
 				return err
 			}
 		}
-		if purge {
-			for _, dir := range []string{p.Etc, p.Data, p.Run} {
-				if owned(dir) == nil {
-					if err := os.RemoveAll(dir); err != nil {
-						return err
-					}
-				}
-			}
-		}
 		return os.RemoveAll(p.Opt)
 	}
 	if e != nil {
@@ -402,6 +473,30 @@ func uninstall(ctx context.Context, p paths, purge bool, out io.Writer) error {
 		if e = owned(dir); e != nil {
 			return e
 		}
+	}
+	if m.PurgePhase != "" || m.DNSOperation != nil {
+		return errors.New("finish pending DNS/purge operation before retained-data uninstall")
+	}
+	if _, err := os.Stat(filepath.Join(p.Data, "state.db")); err == nil {
+		c, err := serviceConfig(ctx, p)
+		if err != nil {
+			return err
+		}
+		if err = saveRetainedRequirements(p, &m, c); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	} else if b, err := platform.ReadPrivate(filepath.Join(p.Etc, "setup.json")); err == nil {
+		var draft setupInput
+		if err = json.Unmarshal(b, &draft); err != nil {
+			return err
+		}
+		if err = saveRetainedRequirements(p, &m, draft.Config); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	var presentUnits []string
 	for _, name := range []string{"nodekit-manager.service", "nodekit-core.service"} {
@@ -447,30 +542,15 @@ func uninstall(ctx context.Context, p paths, purge bool, out io.Writer) error {
 	if _, e = platform.Exec(ctx, "systemctl", "daemon-reload"); e != nil {
 		return e
 	}
-	if e = owned(p.Run); e == nil {
-		if e = os.RemoveAll(p.Run); e != nil {
-			return e
-		}
+	if e = removePurgeRuntime(p, m); e != nil {
+		return e
 	}
-	if purge {
-		if e = os.RemoveAll(p.Data); e != nil {
-			return e
-		}
-		if e = os.RemoveAll(p.Etc); e != nil {
-			return e
-		}
-		if _, e = platform.Exec(ctx, "userdel", "nodekit"); e != nil {
-			return e
-		}
-		_ = func() error { _, e := platform.Exec(ctx, "groupdel", "nodekit"); return e }()
-	} else {
-		m.Firewall = nil
-		m.PendingFirewall = nil
-		m.InitPhase = "retained"
-		if e = saveHost(p, m); e != nil {
-			return e
-		}
+	m.Firewall = nil
+	m.PendingFirewall = nil
+	m.InitPhase = "retained"
+	if e = saveHost(p, m); e != nil {
+		return e
 	}
-	fmt.Fprintln(out, "已卸载项目服务与程序；数据保留:", !purge)
+	fmt.Fprintln(out, "已卸载项目服务与程序；配置、DNS和凭据已保留")
 	return os.RemoveAll(p.Opt)
 }

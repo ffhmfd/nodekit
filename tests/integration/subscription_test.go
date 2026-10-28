@@ -52,7 +52,12 @@ func testPortableLifecycle(t *testing.T, cloudflare bool) {
 	if bin == "" {
 		t.Skip("set NODEKIT_CORE_BIN")
 	}
-	root := t.TempDir()
+	// Unix socket paths must fit sockaddr_un even under long build roots.
+	root, err := os.MkdirTemp("", "nk-life-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
 	cfg, _ := model.New()
 	for i := range cfg.Protocols {
 		cfg.Protocols[i].Port = freePort(t)

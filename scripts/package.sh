@@ -2,7 +2,7 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BUILD=${NODEKIT_BUILD_ROOT:-$(dirname "$ROOT")}
-VERSION=${1:-v0.1.1}
+VERSION=${1:-v0.2.0}
 [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 2
 mkdir -p "$BUILD/dist"
 stage=$(mktemp -d "$BUILD/package-XXXXXXXX")

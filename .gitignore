@@ -9,3 +9,4 @@ build/
 *.tar.gz
 .env
 nodekit.local.json
+__pycache__/

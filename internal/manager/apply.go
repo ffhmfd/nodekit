@@ -78,6 +78,15 @@ func (m *Manager) Recover(ctx context.Context) error {
 	})
 }
 func (m *Manager) Change(ctx context.Context, c model.Config) error {
+	return m.change(ctx, c, false)
+}
+
+// ChangeManaged is called only by the authenticated root coordination endpoint.
+func (m *Manager) ChangeManaged(ctx context.Context, c model.Config) error {
+	return m.change(ctx, c, true)
+}
+
+func (m *Manager) change(ctx context.Context, c model.Config, coordinated bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r, e := m.db.Load()
@@ -89,6 +98,9 @@ func (m *Manager) Change(ctx context.Context, c model.Config) error {
 	}
 	if c.Revision != r.Config.Revision {
 		return errors.New("stale configuration revision")
+	}
+	if !coordinated && (r.Config.ManagedDNS || c.ManagedDNS) && model.DNSFieldsChanged(r.Config, c) {
+		return errors.New("managed DNS changes require the root DNS coordinator")
 	}
 	if e = c.Validate(); e != nil {
 		return e

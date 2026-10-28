@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,18 +9,19 @@ import (
 	"io"
 	"net"
 	"nodekit/internal/cert"
+	"nodekit/internal/cloudflare"
 	"nodekit/internal/core"
 	"nodekit/internal/model"
 	"nodekit/internal/platform"
 	"nodekit/internal/render"
 	"nodekit/internal/store"
+	"nodekit/internal/terminal"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
-func initialize(ctx context.Context, p paths, args []string, in io.Reader, out io.Writer) error {
+func initialize(ctx context.Context, p paths, args []string, in io.Reader, out io.Writer) (resultErr error) {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(out)
 	configFile := fs.String("config", "", "configuration JSON")
@@ -30,6 +30,12 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 	subscriptionPort := fs.Int("subscription-port", 0, "HTTPS subscription port")
 	ipv6 := fs.Bool("ipv6", false, "enable IPv6")
 	address := fs.String("address", "", "public IP address")
+	managedDNS := fs.Bool("managed-dns", false, "manage this node's Cloudflare DNS record")
+	dnsZoneID := fs.String("dns-zone", "", "Cloudflare zone ID (otherwise discover by domain)")
+	adoptDNS := fs.Bool("adopt-dns", false, "explicitly adopt the existing dedicated DNS record")
+	displayName := fs.String("name", "", "node display hostname")
+	country := fs.String("country", "", "two-letter flag country code")
+	realitySNI := fs.String("reality-sni", "", "REALITY server name and target domain")
 	email := fs.String("email", "", "ACME email")
 	token := fs.String("token-file", "", "Cloudflare token file")
 	certPath := fs.String("certificate", "", "import certificate")
@@ -73,17 +79,12 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 			return e
 		}
 	} else if *domain == "" {
-		reader, ok := in.(*bufio.Reader)
-		if !ok {
-			reader = bufio.NewReader(in)
+		session := terminal.FromContext(ctx)
+		if session == nil {
+			session = terminal.New(in, out)
 		}
 		prompt := func(label string) (string, error) {
-			fmt.Fprint(out, label)
-			line, e := reader.ReadString('\n')
-			if e != nil {
-				return "", e
-			}
-			return strings.TrimSpace(line), nil
+			return session.ReadLine(ctx, label, false)
 		}
 		if !explicit["subscription-mode"] {
 			*subscriptionMode, e = prompt("订阅模式 direct（灰云）/cloudflare（橙云），默认 direct: ")
@@ -151,6 +152,33 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 	} else if *configFile == "" && c.EffectiveSubscriptionMode() == "cloudflare" {
 		c.SubscriptionPort = 8443
 	}
+	if *managedDNS {
+		c.ManagedDNS = true
+	}
+	if *configFile == "" {
+		host, _ := os.Hostname()
+		if host == "" {
+			host = "NodeKit"
+		}
+		if *displayName != "" {
+			host = *displayName
+		}
+		if e = c.SetDisplayDefaults(host, *country); e != nil {
+			return e
+		}
+	} else {
+		if *displayName != "" {
+			c.Name = *displayName
+		}
+		if explicit["country"] {
+			c.CountryCode = *country
+		}
+	}
+	if *realitySNI != "" {
+		if e = c.SetRealityServerName(*realitySNI); e != nil {
+			return e
+		}
+	}
 	if e = c.Validate(); e != nil {
 		return e
 	}
@@ -167,6 +195,9 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 		return nil
 	}
 	var host hostManifest
+	if c.ManagedDNS && os.Geteuid() != 0 {
+		return errors.New("managed DNS initialization requires root")
+	}
 	if p.Root == "/" {
 		if os.Geteuid() != 0 {
 			return errors.New("系统安装需要 root")
@@ -180,6 +211,16 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 		}
 		defer lock.Close()
 		host, e = preflightHost(ctx, p)
+		if e != nil {
+			return e
+		}
+	}
+	if p.Root != "/" && c.ManagedDNS {
+		host, e = loadHost(p)
+		if errors.Is(e, os.ErrNotExist) {
+			host = hostManifest{UID: os.Geteuid(), GID: os.Getegid(), Files: map[string]string{}, InitPhase: "prepared"}
+			e = saveHost(p, host)
+		}
 		if e != nil {
 			return e
 		}
@@ -203,8 +244,67 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 		if e != nil {
 			return e
 		}
+		if c.ManagedDNS {
+			standard := filepath.Join(p.Root, "root/nodekit-cloudflare.token")
+			if e = platform.WritePrivate(standard, b); e != nil {
+				return e
+			}
+			host.TokenSource = *token
+		}
 		rt.TokenFile = filepath.Join(p.Etc, "cloudflare.token")
 		if e = platform.WritePrivate(rt.TokenFile, b); e != nil {
+			return e
+		}
+	}
+	if e = writeJSON(filepath.Join(p.Etc, "runtime.json"), rt); e != nil {
+		return e
+	}
+	var dnsAPI *cloudflare.Client
+	databaseCommitted := false
+	if c.ManagedDNS {
+		dnsAPI, e = cloudflare.New(rt.TokenFile)
+		if e != nil {
+			return e
+		}
+		if host.DNSOperation != nil {
+			if e = recoverDNS(ctx, p, &host, dnsAPI); e != nil {
+				return e
+			}
+		}
+		zone := *dnsZoneID
+		if zone == "" {
+			zone, e = dnsZone(ctx, dnsAPI, c.Domain)
+			if e != nil {
+				return e
+			}
+		}
+		var previous *cloudflare.Record
+		if setup, ok := ctx.Value(setupContextKey{}).(setupInput); ok {
+			previous = setup.Previous
+		} else if *adoptDNS {
+			rows, err := dnsAPI.Records(ctx, zone, c.Domain)
+			if err != nil {
+				return err
+			}
+			if len(rows) > 1 {
+				return cloudflare.ErrConflict
+			}
+			if len(rows) == 1 {
+				r := rows[0]
+				if r.Type != "A" && r.Type != "AAAA" {
+					return cloudflare.ErrConflict
+				}
+				previous = &r
+			}
+		}
+		defer func() {
+			if resultErr != nil && !databaseCommitted && host.DNSOperation != nil {
+				cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				resultErr = errors.Join(resultErr, abortDNSChange(cleanup, dnsAPI, &host, func() error { return saveHost(p, host) }))
+			}
+		}()
+		if e = prepareDNSChange(ctx, dnsAPI, &host, model.Config{}, c, zone, previous, func() error { return saveHost(p, host) }); e != nil {
 			return e
 		}
 	}
@@ -255,6 +355,12 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 	}
 	if e = store.Initialize(filepath.Join(p.Data, "state.db"), store.Record{Config: c, Certificate: store.CertificateStatus{Expires: savedCert.NotAfter, Mode: mode}}); e != nil {
 		return e
+	}
+	databaseCommitted = true
+	if c.ManagedDNS {
+		if e = completeDNSChange(ctx, dnsAPI, &host, func() error { return saveHost(p, host) }); e != nil {
+			return e
+		}
 	}
 	if p.Root == "/" {
 		host.InitPhase = "configured"

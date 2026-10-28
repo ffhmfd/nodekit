@@ -224,6 +224,16 @@ func testFiveProtocols(t *testing.T, cloudflare bool) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	if cloudflare {
+		full, err := render.Subscription(c, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		check := &core.Client{Binary: bin, WorkDir: filepath.Join(dir, "full-subscription-check")}
+		if err = check.Check(context.Background(), full); err != nil {
+			t.Fatal("complete subscription rejected by core", err)
+		}
+	}
 	var subs map[string]any
 	if e = yaml.Unmarshal(b, &subs); e != nil {
 		t.Fatal(e)

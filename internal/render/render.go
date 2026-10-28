@@ -1,7 +1,6 @@
 package render
 
 import (
-	"fmt"
 	"gopkg.in/yaml.v3"
 	"nodekit/internal/model"
 	"path/filepath"
@@ -65,7 +64,7 @@ func Subscription(c model.Config, provider bool) ([]byte, error) {
 		if !n.Enabled {
 			continue
 		}
-		name := fmt.Sprintf("%s-%s", c.Name, n.Type)
+		name := c.NodeName(n)
 		names = append(names, name)
 		v := obj{"name": name, "type": n.Type, "server": c.NodeAddress(), "port": n.Port, "udp": true}
 		switch n.Type {

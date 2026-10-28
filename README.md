@@ -1,8 +1,6 @@
-> 历史版本 v0.1.1；新安装推荐 [最新版本](https://github.com/ffhmfd/nodekit/releases/latest)。
-
 # NodeKit
 
-个人 Linux VPS 节点管理工具：Bash 安装入口、Go 管理器和独立 mihomo 内核。
+Linux VPS 节点管理工具：Bash 安装入口、Go 中文向导和独立 mihomo 内核。
 
 ## 功能
 
@@ -13,12 +11,15 @@
 - 每台 VPS 独立统计本项目节点上传/下载，订阅展示总额度及到期日期。
 - 北京时间每月指定日、小时清零，也可以手动清零。
 - Cloudflare DNS-01 申请/续期证书；独立端口和 systemd 单元。
+- 托管本节点 Cloudflare DNS，分阶段彻底卸载，失败可重试。
+- 国旗＋主机名＋协议名称、逐协议自定义名称、可编辑 REALITY SNI。
+- 输入中 Ctrl+C 取消并返回主菜单；主菜单 Ctrl+C 退出。
 
 **总额度和到期时间仅展示，不停用节点。** 订阅显示随客户端刷新更新。
 
 ## 运行环境
 
-目标：Debian 12/13、Ubuntu 22.04/24.04，systemd，AMD64/ARM64。已测试的系统、协议及尚待验收的项目见 验收记录（见该版本 Release 说明）。
+目标：Debian 12/13、Ubuntu 22.04/24.04，systemd，AMD64/ARM64。安装需要 root、Bash、curl、tar、gzip 和 sha256sum。
 
 管理器为无 CGO 的 Go 二进制，目标机无需 Go/Python。锁定内核 `v1.19.33`；以已验证组合为单位升级，不盲目跟随 Alpha。
 
@@ -26,33 +27,39 @@
 
 ```bash
 bash scripts/build.sh test ./...
-bash scripts/package.sh v0.1.1
+bash scripts/package.sh v0.2.0
 ```
 
 构建缓存和发布包默认存于源码目录的上一级，分别为 `cache/`、`modules/`、`tmp/`、`dist/`。可以设置 `NODEKIT_BUILD_ROOT`。本项目开发优先在 VPS 的专用临时目录进行构建。
 
-发布包包含管理器、匹配架构的 mihomo 和发行元信息。正式公开仓库/发布地址尚未设置，以下使用本地包，不提供虚构的一键下载 URL。
+发布包包含管理器、匹配架构的 mihomo 和发行元信息。原创代码采用 MIT；第三方许可证及对应源码见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和同一 Release 的附属资产。
 
 ## 安装与初始化
 
 ```bash
-sudo bash install.sh --file nodekit-v0.1.1-linux-amd64.tar.gz --sha256 <可信的SHA256>
-sudo nodekit init
+# 官方发布仓库
+repo=ffhmfd/nodekit
+curl -fLsS --proto '=https' --proto-redir '=https' "https://github.com/$repo/releases/latest/download/install.sh" -o install.sh
+sudo bash install.sh --repo "$repo"
+# 可用 --version v0.2.0 固定版本。
+# 离线安装仍支持：
+sudo bash install.sh --file nodekit-v0.2.0-linux-amd64.tar.gz --sha256 <可信的SHA256>
+sudo nodekit setup
 ```
 
-ARM64 使用对应包。安装器校验下载包、拒绝路径穿越及未知同名资源。安装程序与初始化节点分开，初始化前准备：
+安装器自动识别 AMD64/ARM64，从同一固定 Release 取得包和 SHA256SUMS。校验用于下载完整性，信任来源是所选仓库和 HTTPS，并非独立数字签名。交互安装后进入向导，已有安装进入管理菜单；非终端运行时显式添加 `--non-interactive`，仅部署程序，随后执行 `nodekit setup` 或带完整参数的 `nodekit init`。初始化前准备：
 
-1. 一个专用子域名，其 A 记录内容为本机公网 IPv4。`direct` 模式使用 **DNS only / 灰云**；希望公开 DNS 只返回 Cloudflare 地址时，使用下述 `cloudflare` **橙云模式**。
-2. 对该 zone 有 DNS 编辑和必要读取权限的 API Token，放在服务器受限文件（例如 `/root/nodekit-cloudflare.token`，权限 `600`）。不要把 Token 填到命令参数或订阅中。
+1. 一个 Cloudflare 区域内的专用子域名。向导创建或显式接管 A/AAAA；`direct` 使用灰云，默认 `cloudflare` 使用橙云。
+2. 该区域的 **Zone Read、DNS Edit** API Token。向导支持隐藏粘贴或受限文件；标准副本 `/root/nodekit-cloudflare.token` 为 root/600，续期副本 `/etc/nodekit/cloudflare.token` 为 root/服务组640。
 3. ACME 注册邮箱、节点使用端口、流量额度和日期。节点 TLS 直连仍需要公网受信任证书，不能用 Cloudflare Origin Certificate 替代。
 
 无交互示例（全为占位值）：
 
 ```bash
-sudo nodekit init \
-  --domain node.example.com --address 203.0.113.10 \
+sudo nodekit init --managed-dns --subscription-mode cloudflare \
+  --domain node.example.com --address '<VPS公网IP>' \
   --email admin@example.com --token-file /root/nodekit-cloudflare.token \
-  --firewall auto
+  --firewall auto --name my-vps --country JP --reality-sni addons.mozilla.org
 ```
 
 `--firewall auto` 使用已识别的 UFW/iptables 管理方式，只维护项目规则。`manual` 模式由用户放行。OCI 安全列表/NSG 也必须允许相应端口。
@@ -62,7 +69,7 @@ sudo nodekit init \
 可以先生成私有配置并编辑，再安装：
 
 ```bash
-sudo nodekit init --domain node.example.com --address 203.0.113.10 --dry-run
+sudo nodekit init --domain node.example.com --address '<VPS公网IP>' --dry-run
 # 编辑 /etc/nodekit/bootstrap.json，包括每个协议 enabled/port、额度和日期。
 sudo nodekit init --config /etc/nodekit/bootstrap.json \
   --email admin@example.com --token-file /root/nodekit-cloudflare.token --firewall auto
@@ -98,7 +105,7 @@ sudo nodekit subscription
 
 模式切换会保留兼容端口，否则选择 8443；端口冲突则拒绝并保持原配置。也可先设置其他兼容订阅端口。缺少 `subscription_mode` 的旧 JSON 始终按 `direct` 处理，旧节点地址/端口不会自动迁移。
 
-公开 DNS 查询返回 Cloudflare 边缘地址后，不再直接返回 VPS IP；这不会删除历史 DNS 记录，也不隐藏订阅中的节点 IP。上线验收应检查公开 DNS、边缘与源站两段 TLS、两种订阅 YAML、userinfo 用量更新和 FlClash 实际连接。真实 Cloudflare 与 GUI 验收进度见 v0.1.1 验收记录（见该版本 Release 说明）。
+公开 DNS 查询返回 Cloudflare 边缘地址后，不再直接返回 VPS IP；这不会删除历史 DNS 记录，也不隐藏订阅中的节点 IP。上线验收应检查公开 DNS、边缘与源站两段 TLS、两种订阅 YAML、userinfo 用量更新和 FlClash 实际连接。
 
 ## 日常使用
 
@@ -119,9 +126,22 @@ sudo nodekit cert renew
 sudo nodekit logs
 sudo nodekit config set subscription-port 8443
 sudo nodekit capabilities              # 只读查看程序支持的订阅模式
+sudo nodekit config set name my-vps
+sudo nodekit config set country JP
+sudo nodekit config set name-style flag-host
+sudo nodekit protocol name vless '我的 REALITY'
+sudo nodekit protocol name vless auto  # 恢复自动名称
+sudo nodekit config set reality-sni addons.mozilla.org
+sudo nodekit config set reality-target addons.mozilla.org:443
+sudo nodekit dns status
+sudo nodekit dns adopt                 # 为旧安装登记匹配DNS，purge将删除它
+sudo nodekit dns recover
+sudo nodekit setup --resume
 ```
 
-`GB/TB` 为十进制，`GiB/TiB` 为二进制。`expiry none` 移除到期显示。`config export` 导出包含节点凭据的私有 JSON，`config apply <文件>` 应用编辑后的配置；修订过期会拒绝覆盖。
+`GB/TB` 为十进制，`GiB/TiB` 为二进制。`expiry none` 移除到期显示。`config export` 导出包含节点凭据的私有 JSON，`config apply <文件>` 替换完整配置，不作局部合并；修订过期会拒绝覆盖。
+
+新配置默认 REALITY SNI 为 `addons.mozilla.org`；旧配置升级保留原值。修改 SNI 会同步握手目标443并探测 TLS 1.3/h2，目标网站日后变化仍可能影响连接。国旗检测失败使用🌐；显示名只影响订阅，不重置节点凭据或用量。
 
 完整订阅：`https://域名:端口/s/token/config.yaml`。FlClash 中添加为远程配置。
 
@@ -155,7 +175,7 @@ sudo nodekit upgrade --file <新版本包> --sha256 <可信的SHA256>
 sudo nodekit rollback
 sudo nodekit recover                   # 恢复未完成的升级
 sudo nodekit uninstall                 # 保留配置与统计
-sudo nodekit uninstall --purge         # 删除本项目数据
+sudo nodekit uninstall --purge         # 删除本节点DNS、项目数据和标准Token文件
 # 保留数据重装程序之后：
 sudo nodekit resume
 ```
@@ -164,7 +184,9 @@ sudo nodekit resume
 
 橙云模式下，升级/回滚在停服务前检查目标程序能力，不支持该模式的 v0.1.0 会被拒绝。确需降级时先显式切回 `direct`，并恢复灰云解析与客户端订阅；这会重新公开域名到源站 IP 的对应关系。不要绕过新版入口手工替换 current 或使用旧程序发起降级。
 
-若 current 版本本身不能执行，可使用 `/opt/nodekit/previous/nodekit recover`。升级快照和日志保存在 root 独占的 `/etc/nodekit/lifecycle`，后台账户无权替换；内核启动前也会检查未完成的升级。
+启用新名称或托管DNS后，不兼容的旧版本会被拒绝。恢复工具也必须支持当前功能；使用同版本或兼容新版管理器执行 `recover`。升级快照和日志保存在 root 独占的 `/etc/nodekit/lifecycle`，后台账户无权替换。
+
+彻底卸载先删除精确登记的DNS，再清理服务和本地数据，最后删除凭据；**不会撤销 Cloudflare API Token**。标准Token路径如果变成符号链接，只删除链接；自选外部输入文件保留。DNS删除失败或记录被外部修改时保留重试状态。中断后使用 `/opt/nodekit/current/nodekit uninstall --purge` 继续，已删除的DNS不会因Ctrl+C恢复。普通卸载保留DNS、Token、证书和用量。手工DNS/导入证书且无Cloudflare凭据的direct安装仅清理本地资源。
 
 手动 `cert renew` 实际由后台服务身份签发和保存，不会将证书/账户文件改成 root 专用。`status` 显示 TLS 证书期限、续期模式和失败重试信息。更换域名可以使用 `nodekit cert renew --domain <新域名>`，新证书成功后才提交配置。
 
@@ -177,3 +199,5 @@ CGO_ENABLED=1 CC='zig cc' bash scripts/build.sh test -race ./...
 ```
 
 没有设置 `NODEKIT_CORE_BIN` 时真实内核集成测试显式跳过。测试时钟可注入，避免改变宿主时钟；跨 VPS 测试只临时放行对端 IP 所需的精确规则，测试结束回收。
+
+公开源码导出：`python3 scripts/export-public.py /path/to/new-public-directory`。仅导出已跟踪的白名单源码和发布文件，不包含 Git 历史、本地运维记录或运行配置。在干净公开仓库推送版本tag后，GitHub Actions 构建并发布双架构资产。`scripts/cross-test.ps1` 通过显式参数接收两台测试VPS及密钥路径；系统生命周期测试只能在空白测试机运行。

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"nodekit/internal/cloudflare"
 	"nodekit/internal/model"
 	"nodekit/internal/platform"
 	"nodekit/packaging"
@@ -22,11 +23,19 @@ type firewallOperation struct {
 	Revision int64
 }
 type hostManifest struct {
-	UID, GID        int
-	Files           map[string]string
-	Firewall        []platform.Binding
-	PendingFirewall *firewallOperation
-	InitPhase       string
+	UID, GID          int
+	Files             map[string]string
+	Firewall          []platform.Binding
+	PendingFirewall   *firewallOperation
+	InitPhase         string
+	InstallationID    string                     `json:"installation_id,omitempty"`
+	DNSRecords        []cloudflare.ManagedRecord `json:"dns_records,omitempty"`
+	DNSOperation      *dnsTransaction            `json:"dns_operation,omitempty"`
+	TokenSource       string                     `json:"token_source,omitempty"`
+	PurgePhase        string                     `json:"purge_phase,omitempty"`
+	RequiredFeatures  []string                   `json:"required_features,omitempty"`
+	RetainedMode      string                     `json:"retained_mode,omitempty"`
+	PurgeDataIdentity *directoryIdentity         `json:"purge_data_identity,omitempty"`
 }
 
 func hashBytes(b []byte) string { return fmt.Sprintf("%x", sha256.Sum256(b)) }

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,11 +10,14 @@ import (
 	"io"
 	"net/http"
 	"nodekit/internal/cert"
+	"nodekit/internal/cloudflare"
 	"nodekit/internal/model"
 	"nodekit/internal/platform"
 	"nodekit/internal/store"
+	"nodekit/internal/terminal"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -35,18 +37,25 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 	if len(args) == 0 {
 		return menu(ctx, p, in, out, errOut)
 	}
+	if len(args) == 1 && args[0] == "setup" && terminal.New(in, out).IsTTY() {
+		return menuInitial(ctx, p, in, out, errOut, "1")
+	}
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
+	defer cancel()
 	if args[0] == "help" || args[0] == "--help" {
 		fmt.Fprintln(out, "NodeKit — install | init | resume | recover | serve | status | config [export|apply|set] | protocol [enable|disable|port|rotate] | subscription [rotate] | usage reset | cert renew | logs | firewall [apply|remove] | uninstall | upgrade | rollback")
 		return 0
 	}
 	if args[0] == "capabilities" {
-		if e := json.NewEncoder(out).Encode(capabilities{SubscriptionModes: []string{"direct", "cloudflare"}}); e != nil {
+		if e := json.NewEncoder(out).Encode(capabilities{SubscriptionModes: []string{"direct", "cloudflare"}, Features: []string{"node-names-v1", "managed-dns-v1", "purge-v1", "interactive-cancel-v1"}}); e != nil {
 			fmt.Fprintln(errOut, e)
 			return 1
 		}
 		return 0
 	}
 	known := map[string]bool{"install": true, "resume": true, "recover": true, "inspect": true, "snapshot": true, "prepare": true, "init": true, "serve": true, "status": true, "config": true, "protocol": true, "subscription": true, "usage": true, "cert": true, "logs": true, "firewall": true, "uninstall": true, "upgrade": true, "rollback": true}
+	known["setup"] = true
+	known["dns"] = true
 	if !known[args[0]] {
 		fmt.Fprintln(errOut, "未知命令:", args[0])
 		return 2
@@ -88,6 +97,10 @@ func callHTTP(ctx context.Context, hc *http.Client, method, url string, body, ou
 }
 func execute(ctx context.Context, p paths, args []string, in io.Reader, out io.Writer) error {
 	switch args[0] {
+	case "setup":
+		return setupCommand(ctx, p, args[1:], in, out)
+	case "dns":
+		return dnsCommand(ctx, p, args[1:], out)
 	case "inspect", "snapshot", "prepare":
 		return serviceDataCommand(ctx, p, args[0], out)
 	case "recover":
@@ -101,6 +114,17 @@ func execute(ctx context.Context, p paths, args []string, in io.Reader, out io.W
 	case "serve":
 		return serve(ctx, p)
 	case "status":
+		if os.Geteuid() == 0 {
+			if m, e := loadHost(p); e == nil {
+				if m.PurgePhase != "" {
+					fmt.Fprintln(out, "待恢复卸载阶段:", m.PurgePhase, "；运行 /opt/nodekit/current/nodekit uninstall --purge")
+					return nil
+				}
+				if m.DNSOperation != nil {
+					fmt.Fprintln(out, "待恢复DNS阶段:", m.DNSOperation.Phase)
+				}
+			}
+		}
 		var r store.Record
 		if e := p.admin(ctx, "GET", "/status", nil, &r); e != nil {
 			return e
@@ -163,6 +187,9 @@ func execute(ctx context.Context, p paths, args []string, in io.Reader, out io.W
 		if e != nil {
 			return e
 		}
+		if m.PurgePhase != "" {
+			return errors.New("purge is incomplete; refusing to restart firewall/service")
+		}
 		if e = verifyAccount(p, m); e != nil {
 			return e
 		}
@@ -209,6 +236,9 @@ func edit(ctx context.Context, p paths, args []string, out io.Writer) error {
 			return e
 		}
 		defer lock.Close()
+		if m, e := loadHost(p); e == nil && m.PurgePhase != "" {
+			return errors.New("purge is incomplete; resume uninstall --purge")
+		}
 	}
 	var c model.Config
 	if e := p.admin(ctx, "GET", "/config", nil, &c); e != nil {
@@ -241,17 +271,22 @@ func edit(ctx context.Context, p paths, args []string, out io.Writer) error {
 			if e != nil {
 				return e
 			}
-			// Missing mode in legacy JSON always means direct, even when the
-			// active configuration currently uses cloudflare.
-			c.SubscriptionMode = ""
-			if e = json.Unmarshal(b, &c); e != nil {
+			// Imports are complete exported configurations. Decode into a fresh
+			// value so absent legacy fields cannot inherit active new features.
+			var imported model.Config
+			if e = json.Unmarshal(b, &imported); e != nil {
 				return e
 			}
+			c = imported
 		} else if args[1] == "set" {
 			if len(args) != 4 {
 				return errors.New("config set quota|expiry|reset|name|domain|address|subscription-mode|subscription-port <值>")
 			}
 			switch args[2] {
+			case "country", "name-style", "reality-sni", "reality-target":
+				if e := applyAdvancedSetting(ctx, &c, args[2], args[3], nil); e != nil {
+					return e
+				}
 			case "address":
 				c.Address = args[3]
 			case "subscription-mode":
@@ -293,6 +328,10 @@ func edit(ctx context.Context, p paths, args []string, out io.Writer) error {
 			case "name":
 				c.Name = args[3]
 			case "domain":
+				if c.ManagedDNS {
+					c.Domain = args[3]
+					break
+				}
 				return p.admin(ctx, "POST", "/cert/renew", map[string]string{"domain": args[3]}, nil)
 			case "subscription-port":
 				n, e := strconv.Atoi(args[3])
@@ -324,6 +363,14 @@ func edit(ctx context.Context, p paths, args []string, out io.Writer) error {
 			}
 			found = true
 			switch args[1] {
+			case "name":
+				if len(args) != 4 {
+					return errors.New("protocol name <协议> <显示名称|auto>")
+				}
+				c.Protocols[i].Name = args[3]
+				if args[3] == "auto" {
+					c.Protocols[i].Name = ""
+				}
 			case "enable":
 				c.Protocols[i].Enabled = true
 			case "disable":
@@ -365,12 +412,16 @@ func edit(ctx context.Context, p paths, args []string, out io.Writer) error {
 		} else if len(args) != 2 {
 			return errors.New("cert renew [--domain <domain>]")
 		}
+		if c.ManagedDNS && domain != "" && domain != c.Domain {
+			c.Domain = domain
+			break
+		}
 		return p.admin(ctx, "POST", "/cert/renew", map[string]string{"domain": domain}, nil)
 	}
 	if e := c.Validate(); e != nil {
 		return e
 	}
-	if c.CertID != "" {
+	if c.CertID != "" && !(old.ManagedDNS && c.Domain != old.Domain) {
 		b, e := cert.Load(filepath.Join(p.Data, "certs"), c.CertID)
 		if e != nil {
 			return e
@@ -396,7 +447,34 @@ func edit(ctx context.Context, p paths, args []string, out io.Writer) error {
 			return e
 		}
 	}
-	if e = p.admin(ctx, "PUT", "/config", c, nil); e != nil {
+	if (old.ManagedDNS || c.ManagedDNS) && model.DNSFieldsChanged(old, c) {
+		if !old.ManagedDNS {
+			return errors.Join(errors.New("use nodekit dns adopt to register existing DNS"), abortFirewall())
+		}
+		applied, err := editDNS(ctx, p, old, c, false)
+		if err != nil {
+			if applied {
+				return errors.Join(errConfigApplied, err, commitFirewall())
+			}
+			if errors.Is(err, cloudflare.ErrUncertain) {
+				return err
+			}
+			return errors.Join(err, abortFirewall())
+		}
+	} else if e = p.admin(ctx, "PUT", "/config", c, nil); e != nil {
+		probe, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		var current model.Config
+		if err := p.admin(probe, "GET", "/config", nil, &current); err != nil {
+			return errors.Join(e, cloudflare.ErrUncertain)
+		}
+		applied, err := observeConfigCommit(old, c, current)
+		if err != nil {
+			return errors.Join(e, err)
+		}
+		if applied {
+			return errors.Join(errConfigApplied, e, commitFirewall())
+		}
 		return errors.Join(e, abortFirewall())
 	}
 	if e = commitFirewall(); e != nil {
@@ -418,90 +496,6 @@ func difference(a, b []platform.Binding) []platform.Binding {
 	}
 	return out
 }
-func menu(ctx context.Context, p paths, in io.Reader, out, errOut io.Writer) int {
-	reader := bufio.NewReader(in)
-	readLine := func() (string, bool) {
-		line, e := reader.ReadString('\n')
-		if e != nil && len(line) == 0 {
-			return "", false
-		}
-		return strings.TrimSpace(line), true
-	}
-	for {
-		fmt.Fprintln(out, "\nNodeKit\n1 初始化安装\n2 状态\n3 订阅链接\n4 手动清零\n5 修改额度\n6 修改到期时间\n7 每月清零安排\n8 协议管理\n9 更新证书\n10 查看日志\n11 升级程序\n12 回滚版本\n13 保留数据卸载\n14 恢复未完成升级\n15 恢复保留的安装\n16 修改订阅模式\n17 修改节点公网 IP\n18 修改订阅端口\n0 退出\n请输入编号:")
-		choice, ok := readLine()
-		if !ok {
-			return 0
-		}
-		var args []string
-		switch choice {
-		case "0":
-			return 0
-		case "1":
-			args = []string{"init"}
-		case "2":
-			args = []string{"status"}
-		case "3":
-			args = []string{"subscription"}
-		case "4":
-			args = []string{"usage", "reset"}
-		case "5", "6", "7":
-			key := map[string]string{"5": "quota", "6": "expiry", "7": "reset"}[choice]
-			fmt.Fprintln(out, "输入值（额度如 500GB；到期如 2026-12-31 18:00；清零如 15@8）:")
-			value, ok := readLine()
-			if !ok {
-				return 0
-			}
-			args = []string{"config", "set", key, value}
-		case "8":
-			fmt.Fprintln(out, "输入 enable|disable|port|rotate 协议 [端口]:")
-			value, ok := readLine()
-			if !ok {
-				return 0
-			}
-			args = append([]string{"protocol"}, strings.Fields(value)...)
-		case "9":
-			args = []string{"cert", "renew"}
-		case "10":
-			args = []string{"logs"}
-		case "11":
-			fmt.Fprintln(out, "发布包路径:")
-			file, ok := readLine()
-			if !ok {
-				return 0
-			}
-			fmt.Fprintln(out, "可信的 SHA256:")
-			sha, ok := readLine()
-			if !ok {
-				return 0
-			}
-			args = []string{"upgrade", "--file", file, "--sha256", sha}
-		case "12":
-			args = []string{"rollback"}
-		case "13":
-			args = []string{"uninstall"}
-		case "14":
-			args = []string{"recover"}
-		case "15":
-			args = []string{"resume"}
-		case "16", "17", "18":
-			key := map[string]string{"16": "subscription-mode", "17": "address", "18": "subscription-port"}[choice]
-			fmt.Fprintln(out, "输入", key, "（模式 direct/cloudflare；橙云端口 2053/2083/2087/2096/8443）:")
-			value, ok := readLine()
-			if !ok {
-				return 0
-			}
-			args = []string{"config", "set", key, value}
-		default:
-			fmt.Fprintln(out, "无效选项")
-			continue
-		}
-		if e := execute(ctx, p, args, reader, out); e != nil {
-			fmt.Fprintln(errOut, e)
-		}
-	}
-}
-
 func installUnits(ctx context.Context, p paths) error {
 	if os.Geteuid() != 0 || p.Root != "/" {
 		return errors.New("systemd 安装需真实系统 root")

@@ -66,7 +66,7 @@ func (p paths) admin(ctx context.Context, method, path string, body any, out any
 	}}
 	defer tr.CloseIdleConnections()
 	timeout := 60 * time.Second
-	if path == "/cert/renew" {
+	if path == "/cert/renew" || path == "/config/managed" {
 		timeout = 11 * time.Minute
 	}
 	return callHTTP(ctx, &http.Client{Transport: tr, Timeout: timeout}, method, "http://admin"+path, body, out)
@@ -155,7 +155,7 @@ func serve(ctx context.Context, p paths) error {
 	defer publicLn.Close()
 	certificates := &certificateController{db: db, backend: mgr, paths: p, runtime: rt}
 	backend := managedBackend{Manager: mgr, certificates: certificates}
-	admin := &http.Server{Handler: httpapi.Admin(backend), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 11 * time.Minute, IdleTimeout: 30 * time.Second}
+	admin := &http.Server{Handler: httpapi.Admin(backend), ConnContext: httpapi.PeerContext, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 11 * time.Minute, IdleTimeout: 30 * time.Second}
 	public := &http.Server{Handler: httpapi.Subscription(mgr), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 30 * time.Second}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

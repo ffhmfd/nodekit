@@ -5,6 +5,10 @@ import (
 	"net/netip"
 )
 
+func DNSFieldsChanged(old, next Config) bool {
+	return old.Domain != next.Domain || old.Address != next.Address || old.EffectiveSubscriptionMode() != next.EffectiveSubscriptionMode() || old.ManagedDNS != next.ManagedDNS
+}
+
 func (c Config) EffectiveSubscriptionMode() string {
 	if c.SubscriptionMode == "" {
 		return "direct"
