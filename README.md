@@ -41,16 +41,16 @@ bash scripts/package.sh v0.2.0
 repo=ffhmfd/nodekit
 curl -fLsS --proto '=https' --proto-redir '=https' "https://github.com/$repo/releases/latest/download/install.sh" -o install.sh
 sudo bash install.sh --repo "$repo"
-# 可用 --version v0.2.0 固定版本。
+# 可用 --version v0.2.1 固定版本。
 # 离线安装仍支持：
-sudo bash install.sh --file nodekit-v0.2.0-linux-amd64.tar.gz --sha256 <可信的SHA256>
+sudo bash install.sh --file nodekit-v0.2.1-linux-amd64.tar.gz --sha256 <可信的SHA256>
 sudo nodekit setup
 ```
 
 安装器自动识别 AMD64/ARM64，从同一固定 Release 取得包和 SHA256SUMS。校验用于下载完整性，信任来源是所选仓库和 HTTPS，并非独立数字签名。交互安装后进入向导，已有安装进入管理菜单；非终端运行时显式添加 `--non-interactive`，仅部署程序，随后执行 `nodekit setup` 或带完整参数的 `nodekit init`。初始化前准备：
 
 1. 一个 Cloudflare 区域内的专用子域名。向导创建或显式接管 A/AAAA；`direct` 使用灰云，默认 `cloudflare` 使用橙云。
-2. 该区域的 **Zone Read、DNS Edit** API Token。向导支持隐藏粘贴或受限文件；标准副本 `/root/nodekit-cloudflare.token` 为 root/600，续期副本 `/etc/nodekit/cloudflare.token` 为 root/服务组640。
+2. 该区域的 **Zone Read、DNS Edit** API Token。向导直接输入或粘贴 Token，输入时不回显，无需准备文件路径；确认提交后自动保存标准副本 `/root/nodekit-cloudflare.token`（root/600）和续期副本 `/etc/nodekit/cloudflare.token`（root/服务组640）。普通卸载保留，彻底卸载删除这两个文件，不撤销 Cloudflare API Token。非交互初始化仍使用 `--token-file` 读取受限文件。
 3. ACME 注册邮箱、节点使用端口、流量额度和日期。节点 TLS 直连仍需要公网受信任证书，不能用 Cloudflare Origin Certificate 替代。
 
 无交互示例（全为占位值）：

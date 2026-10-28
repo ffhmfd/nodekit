@@ -127,19 +127,7 @@ func collectSetup(ctx context.Context, s *terminal.Session, deps wizardDeps) (se
 	if err = c.SetSubscriptionMode(mode); err != nil {
 		return input, err
 	}
-	input.TokenPath, err = ask("Cloudflare Token文件路径（留空隐藏粘贴）", "")
-	if err != nil {
-		return input, err
-	}
-	if input.TokenPath == "" {
-		input.Token, err = s.ReadLine(ctx, "Cloudflare Token（不回显）: ", true)
-	} else {
-		var client *cloudflare.Client
-		client, err = cloudflare.New(input.TokenPath)
-		if err == nil {
-			input.Token = client.Token
-		}
-	}
+	input.Token, err = s.ReadLine(ctx, "Cloudflare Token（直接粘贴，不回显）: ", true)
 	if err != nil {
 		return input, err
 	}
@@ -371,7 +359,7 @@ func collectSetup(ctx context.Context, s *terminal.Session, deps wizardDeps) (se
 			s.Printf("  %s 端口%d\n", c.NodeName(p), p.Port)
 		}
 	}
-	s.Printf("Token将保存在VPS受限文件；彻底卸载删除本节点DNS和/root/nodekit-cloudflare.token，不撤销API Token。\n")
+	s.Printf("Token将自动保存到/root/nodekit-cloudflare.token及续期副本/etc/nodekit/cloudflare.token；普通卸载保留，彻底卸载删除这两个受限文件及本节点DNS，不撤销API Token。\n")
 	if mode == "cloudflare" {
 		s.Printf("请确认Cloudflare回源为Full(strict)，云安全组放行上述端口。\n")
 	}

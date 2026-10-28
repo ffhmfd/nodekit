@@ -92,6 +92,36 @@ func TestPurgeCredentialRemovalDoesNotFollowLinks(t *testing.T) {
 	}
 }
 
+func TestPurgeCredentialsRemovesBothCopiesAndPreservesExternalSource(t *testing.T) {
+	p := makePaths(t.TempDir(), "")
+	files := []string{filepath.Join(p.Root, "root/nodekit-cloudflare.token"), filepath.Join(p.Etc, "cloudflare.token")}
+	for _, file := range files {
+		if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte("test-secret"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	external := filepath.Join(t.TempDir(), "custom-token")
+	if err := os.WriteFile(external, []byte("preserve"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := removePurgeCredentials(p); err != nil {
+			t.Fatal("credential cleanup is not retryable", err)
+		}
+		for _, file := range files {
+			if _, err := os.Lstat(file); !os.IsNotExist(err) {
+				t.Fatal("project credential remains", file, err)
+			}
+		}
+	}
+	if b, err := os.ReadFile(external); err != nil || string(b) != "preserve" {
+		t.Fatal("external Token source changed", err)
+	}
+}
+
 func TestLegacyDNSDiscoveryMustMatchNode(t *testing.T) {
 	c, _ := model.New()
 	c.Address = "8.8.8.8"
