@@ -1,0 +1,25 @@
+[Unit]
+Description=NodeKit isolated proxy core
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nodekit
+Group=nodekit
+UMask=0077
+WorkingDirectory=/var/lib/nodekit
+ExecStartPre=+/opt/nodekit/previous/nodekit recover --boot
+ExecStartPre=+/opt/nodekit/current/nodekit firewall apply
+ExecStart=/opt/nodekit/current/mihomo -d /var/lib/nodekit -f /var/lib/nodekit/active.yaml
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/nodekit /run/nodekit
+
+[Install]
+WantedBy=multi-user.target

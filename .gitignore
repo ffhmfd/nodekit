@@ -1,0 +1,11 @@
+.superpowers/
+.worktrees/
+dist/
+build/
+*.db
+*.db-*
+*.pem
+*.key
+*.tar.gz
+.env
+nodekit.local.json
