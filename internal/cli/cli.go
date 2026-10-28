@@ -39,6 +39,13 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		fmt.Fprintln(out, "NodeKit — install | init | resume | recover | serve | status | config [export|apply|set] | protocol [enable|disable|port|rotate] | subscription [rotate] | usage reset | cert renew | logs | firewall [apply|remove] | uninstall | upgrade | rollback")
 		return 0
 	}
+	if args[0] == "capabilities" {
+		if e := json.NewEncoder(out).Encode(capabilities{SubscriptionModes: []string{"direct", "cloudflare"}}); e != nil {
+			fmt.Fprintln(errOut, e)
+			return 1
+		}
+		return 0
+	}
 	known := map[string]bool{"install": true, "resume": true, "recover": true, "inspect": true, "snapshot": true, "prepare": true, "init": true, "serve": true, "status": true, "config": true, "protocol": true, "subscription": true, "usage": true, "cert": true, "logs": true, "firewall": true, "uninstall": true, "upgrade": true, "rollback": true}
 	if !known[args[0]] {
 		fmt.Fprintln(errOut, "未知命令:", args[0])
@@ -99,6 +106,7 @@ func execute(ctx context.Context, p paths, args []string, in io.Reader, out io.W
 			return e
 		}
 		loc, _ := time.LoadLocation("Asia/Shanghai")
+		fmt.Fprintf(out, "订阅模式: %s\n节点连接地址: %s\n订阅端口: %d\n", r.Config.EffectiveSubscriptionMode(), r.Config.NodeAddress(), r.Config.SubscriptionPort)
 		fmt.Fprintf(out, "%s\n已用上传: %d B\n已用下载: %d B\n额度: %d B（仅展示）\n每月 %d 日 %02d:00 北京时间清零\n下次清零: %s\n最近采集: %s\n", r.Config.Name, r.Meter.Upload, r.Meter.Download, r.Config.Quota, r.Config.ResetDay, r.Config.ResetHour, r.Meter.Next.In(loc).Format("2006-01-02 15:04"), r.Meter.LastSample.In(loc).Format("2006-01-02 15:04:05"))
 		if r.Config.Expiry != nil {
 			fmt.Fprintln(out, "到期:", r.Config.Expiry.In(loc).Format("2006-01-02 15:04"))
@@ -233,14 +241,24 @@ func edit(ctx context.Context, p paths, args []string, out io.Writer) error {
 			if e != nil {
 				return e
 			}
+			// Missing mode in legacy JSON always means direct, even when the
+			// active configuration currently uses cloudflare.
+			c.SubscriptionMode = ""
 			if e = json.Unmarshal(b, &c); e != nil {
 				return e
 			}
 		} else if args[1] == "set" {
 			if len(args) != 4 {
-				return errors.New("config set quota|expiry|reset|name|domain|subscription-port <值>")
+				return errors.New("config set quota|expiry|reset|name|domain|address|subscription-mode|subscription-port <值>")
 			}
 			switch args[2] {
+			case "address":
+				c.Address = args[3]
+			case "subscription-mode":
+				if e := c.SetSubscriptionMode(args[3]); e != nil {
+					return e
+				}
+				fmt.Fprintf(out, "切换订阅模式为 %s，候选 HTTPS 端口: %d\n", c.EffectiveSubscriptionMode(), c.SubscriptionPort)
 			case "quota":
 				n, e := model.ParseBytes(args[3])
 				if e != nil {
@@ -410,7 +428,7 @@ func menu(ctx context.Context, p paths, in io.Reader, out, errOut io.Writer) int
 		return strings.TrimSpace(line), true
 	}
 	for {
-		fmt.Fprintln(out, "\nNodeKit\n1 初始化安装\n2 状态\n3 订阅链接\n4 手动清零\n5 修改额度\n6 修改到期时间\n7 每月清零安排\n8 协议管理\n9 更新证书\n10 查看日志\n11 升级程序\n12 回滚版本\n13 保留数据卸载\n14 恢复未完成升级\n15 恢复保留的安装\n0 退出\n请输入编号:")
+		fmt.Fprintln(out, "\nNodeKit\n1 初始化安装\n2 状态\n3 订阅链接\n4 手动清零\n5 修改额度\n6 修改到期时间\n7 每月清零安排\n8 协议管理\n9 更新证书\n10 查看日志\n11 升级程序\n12 回滚版本\n13 保留数据卸载\n14 恢复未完成升级\n15 恢复保留的安装\n16 修改订阅模式\n17 修改节点公网 IP\n18 修改订阅端口\n0 退出\n请输入编号:")
 		choice, ok := readLine()
 		if !ok {
 			return 0
@@ -466,6 +484,14 @@ func menu(ctx context.Context, p paths, in io.Reader, out, errOut io.Writer) int
 			args = []string{"recover"}
 		case "15":
 			args = []string{"resume"}
+		case "16", "17", "18":
+			key := map[string]string{"16": "subscription-mode", "17": "address", "18": "subscription-port"}[choice]
+			fmt.Fprintln(out, "输入", key, "（模式 direct/cloudflare；橙云端口 2053/2083/2087/2096/8443）:")
+			value, ok := readLine()
+			if !ok {
+				return 0
+			}
+			args = []string{"config", "set", key, value}
 		default:
 			fmt.Fprintln(out, "无效选项")
 			continue

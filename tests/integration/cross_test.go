@@ -36,6 +36,11 @@ func TestCrossHostServer(t *testing.T) {
 		cfg.Protocols[i].Port = freePort(t)
 	}
 	cfg.SubscriptionPort = freePort(t)
+	if os.Getenv("NODEKIT_CROSS_MODE") == "cloudflare" {
+		cfg.SubscriptionMode = "cloudflare"
+		cfg.SubscriptionPort = 8443
+		cfg.Address = os.Getenv("NODEKIT_CROSS_ADDRESS")
+	}
 	cp, kp, cert := testCert(t, dir)
 	b, e := render.Server(cfg, render.Paths{Socket: filepath.Join(dir, "c.sock"), WorkDir: dir, Certificate: cp, PrivateKey: kp})
 	if e != nil {
@@ -98,7 +103,13 @@ func TestCrossHostClient(t *testing.T) {
 	for i, raw := range subs["proxies"].([]any) {
 		p := raw.(map[string]any)
 		t.Run(f.Config.Protocols[i].Type, func(t *testing.T) {
-			p["server"] = f.Server
+			if f.Config.EffectiveSubscriptionMode() == "cloudflare" {
+				if p["server"] != f.Server {
+					t.Fatal("generated node does not dial origin IP")
+				}
+			} else {
+				p["server"] = f.Server
+			}
 			if p["type"] != "vless" && p["type"] != "ss" {
 				p["fingerprint"] = f.Fingerprint
 			}
@@ -114,6 +125,7 @@ func TestCrossHostClient(t *testing.T) {
 			tr := &http.Transport{Proxy: http.ProxyURL(proxy)}
 			defer tr.CloseIdleConnections()
 			hc := &http.Client{Transport: tr, Timeout: 15 * time.Second}
+			waitProxyReady(t, hc, f.HTTP)
 			want := bytes.Repeat([]byte("cross-host-nodekit"), 128)
 			res, e := hc.Post(f.HTTP, "application/octet-stream", bytes.NewReader(want))
 			if e != nil {

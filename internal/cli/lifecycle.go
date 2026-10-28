@@ -295,6 +295,13 @@ func releaseCommand(ctx context.Context, p paths, args []string, out io.Writer) 
 	if _, e = platform.Exec(ctx, filepath.Join(p.Opt, target, "nodekit"), "help"); e != nil {
 		return e
 	}
+	config, e := serviceConfig(ctx, p)
+	if e != nil {
+		return e
+	}
+	if e = checkReleaseCompatibility(ctx, config, filepath.Join(p.Opt, target, "nodekit")); e != nil {
+		return e
+	}
 	_ = p.admin(ctx, "POST", "/usage/flush", nil, nil)
 	j := upgradeJournal{Old: old, New: target, Previous: previous, Phase: "prepared"}
 	if e = writeJournal(p, j); e != nil {

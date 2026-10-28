@@ -67,7 +67,7 @@ func Subscription(c model.Config, provider bool) ([]byte, error) {
 		}
 		name := fmt.Sprintf("%s-%s", c.Name, n.Type)
 		names = append(names, name)
-		v := obj{"name": name, "type": n.Type, "server": c.Domain, "port": n.Port, "udp": true}
+		v := obj{"name": name, "type": n.Type, "server": c.NodeAddress(), "port": n.Port, "udp": true}
 		switch n.Type {
 		case "vless":
 			v["uuid"] = n.UUID

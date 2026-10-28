@@ -38,6 +38,7 @@ type Config struct {
 	IPv6             bool       `json:"ipv6"`
 	Protocols        []Protocol `json:"protocols"`
 	SubscriptionPort int        `json:"subscription_port"`
+	SubscriptionMode string     `json:"subscription_mode,omitempty"`
 	Quota            int64      `json:"quota"`
 	Expiry           *time.Time `json:"expiry,omitempty"`
 	ResetDay         int        `json:"reset_day"`
@@ -124,6 +125,9 @@ func (c Config) Validate() error {
 	}
 	if c.Address != "" && net.ParseIP(c.Address) == nil {
 		return errors.New("address must be an IP")
+	}
+	if e := c.ValidateSubscription(); e != nil {
+		return e
 	}
 	if c.Quota < 0 || c.ResetDay < 1 || c.ResetDay > 31 || c.ResetHour < 0 || c.ResetHour > 23 {
 		return errors.New("invalid quota/reset time")

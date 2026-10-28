@@ -141,7 +141,45 @@ func totals(t *testing.T, socket string) (int64, int64) {
 	return v.Upload, v.Download
 }
 
+// Mihomo opens listeners before ApplyConfig calls tunnel.OnRunning. A TCP
+// accept alone is therefore not a readiness signal for proxy traffic.
+func waitProxyReady(t *testing.T, client *http.Client, target string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for attempts := 1; ; attempts++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := client.Do(req)
+		if err == nil {
+			_, readErr := io.Copy(io.Discard, response.Body)
+			response.Body.Close()
+			if response.StatusCode == 200 && readErr == nil {
+				if attempts > 1 {
+					t.Logf("proxy forwarding ready after %d startup probes", attempts)
+				}
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("proxy forwarding never became ready", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
 func TestFiveProtocols(t *testing.T) {
+	testFiveProtocols(t, false)
+}
+
+func TestCloudflareFiveProtocols(t *testing.T) {
+	testFiveProtocols(t, true)
+}
+
+func testFiveProtocols(t *testing.T, cloudflare bool) {
 	bin := os.Getenv("NODEKIT_CORE_BIN")
 	if bin == "" {
 		t.Skip("set NODEKIT_CORE_BIN to run isolated real-kernel tests")
@@ -155,6 +193,11 @@ func TestFiveProtocols(t *testing.T) {
 		c.Protocols[i].Port = freePort(t)
 	}
 	c.SubscriptionPort = freePort(t)
+	if cloudflare {
+		c.SubscriptionMode = "cloudflare"
+		c.SubscriptionPort = 8443
+		c.Address = "8.8.8.8"
+	}
 	serverDir := filepath.Join(dir, "server")
 	if e = os.MkdirAll(serverDir, 0700); e != nil {
 		t.Fatal(e)
@@ -187,6 +230,9 @@ func TestFiveProtocols(t *testing.T) {
 	}
 	for i, raw := range subs["proxies"].([]any) {
 		n := raw.(map[string]any)
+		if cloudflare && n["server"] != "8.8.8.8" {
+			t.Fatal("cloudflare renderer did not emit the configured IP")
+		}
 		t.Run(c.Protocols[i].Type, func(t *testing.T) {
 			n["server"] = "127.0.0.1"
 			if c.Protocols[i].Type != "vless" && c.Protocols[i].Type != "ss" {
@@ -207,6 +253,7 @@ func TestFiveProtocols(t *testing.T) {
 			tr := &http.Transport{Proxy: http.ProxyURL(proxy), DisableKeepAlives: true}
 			defer tr.CloseIdleConnections()
 			hc := &http.Client{Transport: tr, Timeout: 20 * time.Second}
+			waitProxyReady(t, hc, target.URL)
 			body := bytes.Repeat([]byte("x"), 1024)
 			for j := 0; j < 20; j++ {
 				r, e := hc.Post(target.URL, "application/octet-stream", bytes.NewReader(body))

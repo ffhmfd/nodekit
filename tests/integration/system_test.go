@@ -50,6 +50,11 @@ func TestSystemLifecycle(t *testing.T) {
 		cfg.Protocols[i].Port = freePort(t)
 	}
 	cfg.SubscriptionPort = freePort(t)
+	if os.Getenv("NODEKIT_SYSTEM_MODE") == "cloudflare" {
+		cfg.SubscriptionMode = "cloudflare"
+		cfg.SubscriptionPort = availableCloudflarePort(t, 0)
+		cfg.Address = "8.8.8.8"
+	}
 	defer func() {
 		_ = exec.Command("systemctl", "disable", "--now", "nodekit-manager.service", "nodekit-core.service").Run()
 		_ = (platform.Firewall{}).Remove(context.Background(), platform.Bindings(cfg))
@@ -106,6 +111,9 @@ func TestSystemLifecycle(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	invoke("status")
+	if cfg.EffectiveSubscriptionMode() == "cloudflare" {
+		exerciseLegacyRejection(t)
+	}
 	invoke("config", "set", "quota", "2GB")
 	invoke("usage", "reset")
 	exerciseHostSafety(t, invoke, &cfg)

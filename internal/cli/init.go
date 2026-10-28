@@ -25,7 +25,10 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(out)
 	configFile := fs.String("config", "", "configuration JSON")
-	domain := fs.String("domain", "", "DNS only domain")
+	domain := fs.String("domain", "", "subscription and certificate domain")
+	subscriptionMode := fs.String("subscription-mode", "", "direct or cloudflare")
+	subscriptionPort := fs.Int("subscription-port", 0, "HTTPS subscription port")
+	ipv6 := fs.Bool("ipv6", false, "enable IPv6")
 	address := fs.String("address", "", "public IP address")
 	email := fs.String("email", "", "ACME email")
 	token := fs.String("token-file", "", "Cloudflare token file")
@@ -38,6 +41,8 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 	if e := fs.Parse(args); e != nil {
 		return e
 	}
+	explicit := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
 	if *firewall != "manual" && *firewall != "auto" {
 		return errors.New("firewall must be manual or auto")
 	}
@@ -80,7 +85,13 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 			}
 			return strings.TrimSpace(line), nil
 		}
-		c.Domain, e = prompt("灰云子域名: ")
+		if !explicit["subscription-mode"] {
+			*subscriptionMode, e = prompt("订阅模式 direct（灰云）/cloudflare（橙云），默认 direct: ")
+			if e != nil {
+				return e
+			}
+		}
+		c.Domain, e = prompt("订阅/证书子域名: ")
 		if e != nil {
 			return e
 		}
@@ -125,6 +136,20 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 	}
 	if *address != "" {
 		c.Address = *address
+	}
+	if explicit["ipv6"] {
+		c.IPv6 = *ipv6
+	}
+	if *subscriptionMode != "" {
+		c.SubscriptionMode = *subscriptionMode
+	}
+	if explicit["subscription-mode"] && *subscriptionMode == "" {
+		return errors.New("subscription mode must be direct or cloudflare")
+	}
+	if explicit["subscription-port"] {
+		c.SubscriptionPort = *subscriptionPort
+	} else if *configFile == "" && c.EffectiveSubscriptionMode() == "cloudflare" {
+		c.SubscriptionPort = 8443
 	}
 	if e = c.Validate(); e != nil {
 		return e
@@ -194,18 +219,8 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 			return e
 		}
 	} else {
-		ips, e := net.DefaultResolver.LookupIPAddr(ctx, c.Domain)
-		if e != nil {
+		if e = validateDomainAddress(ctx, c.EffectiveSubscriptionMode(), c.Domain, c.Address, net.DefaultResolver.LookupIPAddr); e != nil {
 			return e
-		}
-		matched := false
-		for _, ip := range ips {
-			if ip.IP.String() == c.Address {
-				matched = true
-			}
-		}
-		if !matched {
-			return errors.New("域名 A/AAAA 与配置 address 不匹配；请检查灰云解析")
 		}
 		bundle, e = (cert.ACME{}).Obtain(ctx, cert.Options{Domain: c.Domain, Email: rt.Email, TokenFile: rt.TokenFile, DirectoryURL: rt.DirectoryURL, StateDir: filepath.Join(p.Data, "acme")})
 		if e != nil {

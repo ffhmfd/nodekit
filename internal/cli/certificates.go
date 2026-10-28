@@ -55,18 +55,8 @@ func (c *certificateController) Renew(ctx context.Context, domain string) error 
 		return errors.New("invalid certificate domain")
 	}
 	if domain != originalDomain {
-		ips, e := net.DefaultResolver.LookupIPAddr(ctx, domain)
-		if e != nil {
+		if e = validateDomainAddress(ctx, r.Config.EffectiveSubscriptionMode(), domain, r.Config.Address, net.DefaultResolver.LookupIPAddr); e != nil {
 			return e
-		}
-		match := false
-		for _, ip := range ips {
-			if ip.IP.String() == r.Config.Address {
-				match = true
-			}
-		}
-		if !match {
-			return errors.New("new domain does not resolve to configured public IP")
 		}
 	}
 	now := time.Now().UTC()
@@ -98,16 +88,16 @@ func (c *certificateController) Renew(ctx context.Context, domain string) error 
 	if e != nil {
 		return failure(e)
 	}
-	id, e := cert.Store(filepath.Join(c.paths.Data, "certs"), bundle, domain, time.Now())
-	if e != nil {
-		return failure(e)
-	}
 	latest, e := c.backend.View(ctx)
 	if e != nil {
 		return failure(e)
 	}
-	if latest.Config.Domain != originalDomain {
-		return failure(errors.New("domain changed during issuance"))
+	if latest.Config.Domain != originalDomain || latest.Config.EffectiveSubscriptionMode() != r.Config.EffectiveSubscriptionMode() || latest.Config.Address != r.Config.Address {
+		return failure(errors.New("domain, subscription mode or address changed during issuance; retry with current configuration"))
+	}
+	id, e := cert.Store(filepath.Join(c.paths.Data, "certs"), bundle, domain, time.Now())
+	if e != nil {
+		return failure(e)
 	}
 	oldID := latest.Config.CertID
 	latest.Config.Domain = domain

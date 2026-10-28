@@ -1,4 +1,4 @@
-> 历史版本 v0.1.0；新安装推荐 [最新版本](https://github.com/ffhmfd/nodekit/releases/latest)。
+> 历史版本 v0.1.1；新安装推荐 [最新版本](https://github.com/ffhmfd/nodekit/releases/latest)。
 
 # NodeKit
 
@@ -9,6 +9,7 @@
 - VLESS REALITY Vision、SS2022、TUIC V5、Hysteria2、AnyTLS。
 - 中文菜单和非交互命令；节点配置与订阅由同一份配置生成。
 - HTTPS 完整配置订阅和纯节点 provider，面向 FlClash 等 mihomo 客户端。
+- 可选 Cloudflare 橙云 HTTPS 订阅，五协议节点使用公网 IP 直连并保持 TLS 身份校验。
 - 每台 VPS 独立统计本项目节点上传/下载，订阅展示总额度及到期日期。
 - 北京时间每月指定日、小时清零，也可以手动清零。
 - Cloudflare DNS-01 申请/续期证书；独立端口和 systemd 单元。
@@ -25,7 +26,7 @@
 
 ```bash
 bash scripts/build.sh test ./...
-bash scripts/package.sh v0.1.0
+bash scripts/package.sh v0.1.1
 ```
 
 构建缓存和发布包默认存于源码目录的上一级，分别为 `cache/`、`modules/`、`tmp/`、`dist/`。可以设置 `NODEKIT_BUILD_ROOT`。本项目开发优先在 VPS 的专用临时目录进行构建。
@@ -35,15 +36,15 @@ bash scripts/package.sh v0.1.0
 ## 安装与初始化
 
 ```bash
-sudo bash install.sh --file nodekit-v0.1.0-linux-amd64.tar.gz --sha256 <可信的SHA256>
+sudo bash install.sh --file nodekit-v0.1.1-linux-amd64.tar.gz --sha256 <可信的SHA256>
 sudo nodekit init
 ```
 
 ARM64 使用对应包。安装器校验下载包、拒绝路径穿越及未知同名资源。安装程序与初始化节点分开，初始化前准备：
 
-1. 一个专用子域名，其 A 记录指向本机公网 IPv4，Cloudflare 设置 **DNS only / 灰云**。
+1. 一个专用子域名，其 A 记录内容为本机公网 IPv4。`direct` 模式使用 **DNS only / 灰云**；希望公开 DNS 只返回 Cloudflare 地址时，使用下述 `cloudflare` **橙云模式**。
 2. 对该 zone 有 DNS 编辑和必要读取权限的 API Token，放在服务器受限文件（例如 `/root/nodekit-cloudflare.token`，权限 `600`）。不要把 Token 填到命令参数或订阅中。
-3. ACME 注册邮箱、节点使用端口、流量额度和日期。Cloudflare Origin Certificate 不能替代灰云连接需要的公网受信任证书。
+3. ACME 注册邮箱、节点使用端口、流量额度和日期。节点 TLS 直连仍需要公网受信任证书，不能用 Cloudflare Origin Certificate 替代。
 
 无交互示例（全为占位值）：
 
@@ -69,6 +70,36 @@ sudo nodekit init --config /etc/nodekit/bootstrap.json \
 
 首次 ACME 测试可使用 `--staging`，其证书不被普通客户端信任；正式部署使用生产 CA。也可用 `--certificate` 和 `--key` 导入已有匹配域名的证书，未配置 DNS 凭据时需自行续期。
 
+### 橙云订阅 + IP 直连（v0.1.1）
+
+1. 将订阅子域名的 A 记录设为橙云，内容填对应 VPS IP。检查同名 A/AAAA，避免遗漏灰云源站记录。
+2. 订阅回源使用 **Full (strict)**；调整前检查区域中其他网站的设置。不要将订阅路径套入登录页或交互式验证码，不要重定向到源站 IP，也不要覆盖 `Cache-Control: no-store` 或 `Subscription-Userinfo`。
+3. 放行源站订阅端口 **8443/TCP** 和各协议端口。OCI 安全列表/NSG 同样需要放行。
+4. 使用自己的真实公网 IP 初始化（`<VPS公网IP>` 为占位符，文档保留地址和私网地址会被拒绝）：
+
+```bash
+sudo nodekit init --subscription-mode cloudflare \
+  --domain node.example.com --address '<VPS公网IP>' \
+  --email admin@example.com --token-file /root/nodekit-cloudflare.token \
+  --firewall auto
+```
+
+新建橙云配置默认 8443，也可通过 `--subscription-port` 选择 2053、2083、2087、2096、8443。IPv6 地址需要 `--ipv6`，或在导入配置中设置 `ipv6: true`。使用 `--config` 时保留文件中的显式端口；不兼容时应编辑文件或传入合法端口。
+
+订阅形如 `https://node.example.com:8443/s/<token>/config.yaml`。只有 HTTPS 订阅经过 Cloudflare；全部节点 `server` 为 VPS IP，TUIC/HY2/AnyTLS 的 SNI 为证书域名，REALITY 使用自己的 SNI。节点不依赖域名解析，TLS 校验保持启用。DNS-01 签证书不要求公开 DNS 指向源站。
+
+**已有配置迁移：先升级至 v0.1.1，再设置真实公网 IP 和模式，最后开启橙云并刷新客户端订阅。**
+
+```bash
+sudo nodekit config set address '<VPS公网IP>'
+sudo nodekit config set subscription-mode cloudflare
+sudo nodekit subscription
+```
+
+模式切换会保留兼容端口，否则选择 8443；端口冲突则拒绝并保持原配置。也可先设置其他兼容订阅端口。缺少 `subscription_mode` 的旧 JSON 始终按 `direct` 处理，旧节点地址/端口不会自动迁移。
+
+公开 DNS 查询返回 Cloudflare 边缘地址后，不再直接返回 VPS IP；这不会删除历史 DNS 记录，也不隐藏订阅中的节点 IP。上线验收应检查公开 DNS、边缘与源站两段 TLS、两种订阅 YAML、userinfo 用量更新和 FlClash 实际连接。真实 Cloudflare 与 GUI 验收进度见 v0.1.1 验收记录（见该版本 Release 说明）。
+
 ## 日常使用
 
 ```bash
@@ -86,6 +117,8 @@ sudo nodekit config set reset '15@8'     # 每月15日北京时间08:00
 sudo nodekit usage reset
 sudo nodekit cert renew
 sudo nodekit logs
+sudo nodekit config set subscription-port 8443
+sudo nodekit capabilities              # 只读查看程序支持的订阅模式
 ```
 
 `GB/TB` 为十进制，`GiB/TiB` 为二进制。`expiry none` 移除到期显示。`config export` 导出包含节点凭据的私有 JSON，`config apply <文件>` 应用编辑后的配置；修订过期会拒绝覆盖。
@@ -128,6 +161,8 @@ sudo nodekit resume
 ```
 
 先验证新配置和二进制，再切换版本；新服务健康检查失败回退。更改协议凭据、监听或证书可能使该协议的连接重建。现有 Caddy、sing-box、Docker 等不作为本项目操作对象。
+
+橙云模式下，升级/回滚在停服务前检查目标程序能力，不支持该模式的 v0.1.0 会被拒绝。确需降级时先显式切回 `direct`，并恢复灰云解析与客户端订阅；这会重新公开域名到源站 IP 的对应关系。不要绕过新版入口手工替换 current 或使用旧程序发起降级。
 
 若 current 版本本身不能执行，可使用 `/opt/nodekit/previous/nodekit recover`。升级快照和日志保存在 root 独占的 `/etc/nodekit/lifecycle`，后台账户无权替换；内核启动前也会检查未完成的升级。
 
