@@ -350,6 +350,10 @@ func collectSetup(ctx context.Context, s *terminal.Session, deps wizardDeps) (se
 	if err = c.Validate(); err != nil {
 		return input, err
 	}
+	input.Firewall, err = selectSetupFirewall(ctx, s, c, input.Firewall)
+	if err != nil {
+		return input, err
+	}
 	if err = deps.Probe(ctx, c.Reality); err != nil {
 		return input, err
 	}

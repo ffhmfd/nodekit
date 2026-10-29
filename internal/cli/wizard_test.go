@@ -20,6 +20,12 @@ import (
 )
 
 func TestWizardCollectsCandidateWithoutSideEffects(t *testing.T) {
+	// Keep this input-collection test independent of the host firewall.
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "iptables"), []byte("#!/bin/sh\ncase \"$*\" in '-S INPUT') exit 0;; '-C INPUT '*) exit 1;; *) exit 99;; esac\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
 	root := t.TempDir()
 	deps := wizardDeps{
 		Hostname: func() (string, error) { return "system-host", nil },

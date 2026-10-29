@@ -109,7 +109,7 @@ func execute(ctx context.Context, p paths, args []string, in io.Reader, out io.W
 	case "install":
 		return installPackage(ctx, p, args[1:], out)
 	case "resume":
-		return resume(ctx, p)
+		return resumeCommand(ctx, p, args[1:], out)
 	case "init":
 		return initialize(ctx, p, args[1:], in, out)
 	case "serve":
@@ -128,6 +128,9 @@ func execute(ctx context.Context, p paths, args []string, in io.Reader, out io.W
 		}
 		var r store.Record
 		if e := p.admin(ctx, "GET", "/status", nil, &r); e != nil {
+			if pending := incompleteInstallation(p); pending != nil {
+				return pending
+			}
 			return e
 		}
 		loc, _ := time.LoadLocation("Asia/Shanghai")
@@ -235,9 +238,14 @@ func edit(ctx context.Context, p paths, args []string, out io.Writer) error {
 }
 
 func editWithIPv6Deps(ctx context.Context, p paths, args []string, out io.Writer, deps ipv6Deps) error {
-	if p.Root == "/" && os.Geteuid() == 0 {
+	if p.Root == "/" && os.Geteuid() == 0 && !(args[0] == "subscription" && len(args) == 1) {
 		lock, e := operationLock(p)
 		if e != nil {
+			if args[0] == "subscription" {
+				if pending := incompleteInstallation(p); pending != nil {
+					return pending
+				}
+			}
 			return e
 		}
 		defer lock.Close()
@@ -247,6 +255,11 @@ func editWithIPv6Deps(ctx context.Context, p paths, args []string, out io.Writer
 	}
 	var c model.Config
 	if e := p.admin(ctx, "GET", "/config", nil, &c); e != nil {
+		if args[0] == "subscription" {
+			if pending := incompleteInstallation(p); pending != nil {
+				return pending
+			}
+		}
 		if args[0] == "ipv6" {
 			return fmt.Errorf("请先完成IPv4初始化，并确认管理服务运行：%w", e)
 		}

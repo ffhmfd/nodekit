@@ -27,7 +27,7 @@ Linux VPS 节点管理工具：Bash 安装入口、Go 中文向导和独立 miho
 
 ```bash
 bash scripts/build.sh test ./...
-bash scripts/package.sh v0.4.0
+bash scripts/package.sh v0.4.1
 ```
 
 构建缓存和发布包默认存于源码目录的上一级，分别为 `cache/`、`modules/`、`tmp/`、`dist/`。可以设置 `NODEKIT_BUILD_ROOT`。本项目开发优先在 VPS 的专用临时目录进行构建。
@@ -41,9 +41,9 @@ bash scripts/package.sh v0.4.0
 repo=ffhmfd/nodekit
 curl -fLsS --proto '=https' --proto-redir '=https' "https://github.com/$repo/releases/latest/download/install.sh" -o install.sh
 sudo bash install.sh --repo "$repo"
-# 可用 --version v0.4.0 固定版本。
+# 可用 --version v0.4.1 固定版本。
 # 离线安装仍支持：
-sudo bash install.sh --file nodekit-v0.4.0-linux-amd64.tar.gz --sha256 <可信的SHA256>
+sudo bash install.sh --file nodekit-v0.4.1-linux-amd64.tar.gz --sha256 <可信的SHA256>
 sudo nodekit setup
 ```
 
@@ -63,6 +63,10 @@ sudo nodekit init --managed-dns --subscription-mode cloudflare \
 ```
 
 `--firewall auto` 使用已识别的 UFW/iptables 管理方式，只维护项目规则。`manual` 模式由用户放行。OCI 安全列表/NSG 也必须允许相应端口。
+
+安装在保存配置/凭据、创建 DNS 和申请证书之前先做只读防火墙预检，检查自动管理后端及所需地址族。向导中 `auto` 不兼容时会明确提示，可输入 `manual` 继续；非交互初始化会退出，需显式添加 `--firewall manual` 后重试。`manual` 不自动放行端口，节点、HTTPS 订阅和云安全组仍需自行配置。`--dry-run` 仅生成私有配置，不要求目标机具备防火墙管理能力。
+
+安装失败会显示具体阶段与恢复命令，菜单查询订阅会提示“安装未完成”。已保存向导使用 `nodekit setup --resume`（菜单23），已写入节点数据库但服务未就绪使用 `nodekit resume`；两者均可显式追加 `--firewall manual`。非向导且尚未写入数据库时，修复原因后重新运行原 `init` 命令。存在待恢复 DNS 操作时，先按提示运行 `nodekit dns recover`。预检通过后仍可能遇到系统状态变化或规则写入失败，需按实际失败阶段处理。
 
 默认候选端口：VLESS 24441/TCP，SS2022 24442/TCP+UDP，TUIC 24443/UDP，HY2 24444/UDP，AnyTLS 24445/TCP，HTTPS 订阅 24446/TCP。冲突时拒绝占用，使用私有配置文件修改端口后初始化。
 

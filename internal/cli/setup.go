@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"nodekit/internal/platform"
@@ -14,10 +15,17 @@ import (
 
 type setupContextKey struct{}
 
-func setupCommand(ctx context.Context, p paths, args []string, in io.Reader, out io.Writer) error {
-	resume := len(args) == 1 && args[0] == "--resume"
-	if len(args) > 0 && !resume {
-		return errors.New("setup [--resume]")
+func setupCommand(ctx context.Context, p paths, args []string, in io.Reader, out io.Writer) (resultErr error) {
+	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
+	fs.SetOutput(out)
+	resumeFlag := fs.Bool("resume", false, "continue saved setup")
+	firewall := fs.String("firewall", "", "override saved firewall mode: auto or manual")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	resume := *resumeFlag
+	if fs.NArg() != 0 || *firewall != "" && (!resume || *firewall != "auto" && *firewall != "manual") {
+		return errors.New("setup [--resume [--firewall auto|manual]]")
 	}
 	s := terminal.FromContext(ctx)
 	if s == nil {
@@ -29,14 +37,58 @@ func setupCommand(ctx context.Context, p paths, args []string, in io.Reader, out
 	if os.Geteuid() != 0 {
 		return errors.New("初始化向导需要root")
 	}
+	stage := "读取安装向导"
+	defer func() {
+		if resultErr != nil {
+			resultErr = describeInstallFailure(p, stage, resultErr)
+		}
+	}()
 	draft := filepath.Join(p.Etc, "setup.json")
+	alreadyReady := func() bool {
+		m, err := loadHost(p)
+		if err != nil || m.InitPhase != "ready" {
+			return false
+		}
+		_, err = os.Stat(filepath.Join(p.Data, "state.db"))
+		return err == nil
+	}
 	var input setupInput
 	if resume {
+		lock, err := operationLock(p)
+		if err != nil {
+			return err
+		}
+		ready := alreadyReady()
+		lock.Close()
+		if ready {
+			fmt.Fprintln(out, "安装已完成，请使用管理菜单。")
+			return nil
+		}
 		b, err := platform.ReadPrivate(draft)
 		if err != nil {
 			return err
 		}
 		if err = json.Unmarshal(b, &input); err != nil {
+			return err
+		}
+		if *firewall != "" {
+			input.Firewall = *firewall
+		}
+		// Once the database is published it is authoritative. Resume through
+		// its ownership journal, not a possibly stale wizard configuration.
+		if _, err := os.Stat(filepath.Join(p.Data, "state.db")); err == nil && p.Root == "/" {
+			if err := resumeWithFirewall(ctx, p, *firewall); err != nil {
+				return err
+			}
+			return finishSetup(p, out)
+		}
+		if err = input.Config.Validate(); err != nil {
+			return err
+		}
+		stage = "防火墙预检"
+		input.Firewall, err = selectSetupFirewall(ctx, s, input.Config, input.Firewall)
+		if err != nil {
+			rememberPreflightFailure(p)
 			return err
 		}
 	} else {
@@ -83,7 +135,24 @@ func setupCommand(ctx context.Context, p paths, args []string, in io.Reader, out
 		return err
 	}
 	configFile := filepath.Join(p.Etc, "setup-config.json")
-	if err := writeJSON(configFile, input.Config); err != nil {
+	stage = "保存安装向导"
+	lock, err := operationLock(p)
+	if err != nil {
+		return err
+	}
+	if alreadyReady() {
+		lock.Close()
+		fmt.Fprintln(out, "安装已完成，请使用管理菜单。")
+		return nil
+	}
+	if err = saveInstallProgress(p, stage, false); err == nil {
+		err = writeJSON(draft, input)
+	}
+	if err == nil {
+		err = writeJSON(configFile, input.Config)
+	}
+	lock.Close()
+	if err != nil {
 		return err
 	}
 	ctx = context.WithValue(ctx, setupContextKey{}, input)
@@ -91,7 +160,11 @@ func setupCommand(ctx context.Context, p paths, args []string, in io.Reader, out
 	if err := initialize(ctx, p, initArgs, in, out); err != nil {
 		return err
 	}
-	for _, file := range []string{draft, configFile} {
+	return finishSetup(p, out)
+}
+
+func finishSetup(p paths, out io.Writer) error {
+	for _, file := range []string{filepath.Join(p.Etc, "setup.json"), filepath.Join(p.Etc, "setup-config.json")} {
 		if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}

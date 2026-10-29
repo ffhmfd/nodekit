@@ -56,11 +56,29 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 	if _, e := os.Stat(filepath.Join(p.Data, "state.db")); e == nil {
 		if p.Root == "/" {
 			if m, err := loadHost(p); err == nil && m.InitPhase != "ready" {
-				return resume(ctx, p)
+				mode := ""
+				if explicit["firewall"] {
+					mode = *firewall
+				}
+				return resumeWithFirewall(ctx, p, mode)
 			}
 		}
 		return errors.New("已有配置，请使用 config/protocol 命令；重装请使用恢复流程")
 	}
+	stage := "参数校验"
+	journal := false
+	advance := func(next string) error {
+		stage = next
+		if journal {
+			return saveInstallProgress(p, stage, false)
+		}
+		return nil
+	}
+	defer func() {
+		if resultErr != nil && !*dry {
+			resultErr = describeInstallFailure(p, stage, resultErr)
+		}
+	}()
 	if *dry {
 		if _, e := os.Stat(bootstrap); e == nil {
 			return errors.New("已有 bootstrap.json，拒绝覆盖凭据")
@@ -182,6 +200,14 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 	if e = c.Validate(); e != nil {
 		return e
 	}
+	if !*dry {
+		stage = "防火墙预检"
+		if e = checkInstallFirewall(ctx, c, *firewall); e != nil {
+			rememberPreflightFailure(p)
+			return e
+		}
+	}
+	stage = "准备安装目录"
 	for _, dir := range []string{p.Etc, p.Data, p.Run, p.Opt} {
 		if e = platform.Claim(dir); e != nil {
 			return e
@@ -195,6 +221,15 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 		return nil
 	}
 	var host hostManifest
+	lock, e := operationLock(p)
+	if e != nil {
+		return e
+	}
+	defer lock.Close()
+	journal = true
+	if e = advance("系统环境检查"); e != nil {
+		return e
+	}
 	if c.ManagedDNS && os.Geteuid() != 0 {
 		return errors.New("managed DNS initialization requires root")
 	}
@@ -205,11 +240,6 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 		if _, e = platform.Probe(ctx); e != nil {
 			return e
 		}
-		lock, e := operationLock(p)
-		if e != nil {
-			return e
-		}
-		defer lock.Close()
 		host, e = preflightHost(ctx, p)
 		if e != nil {
 			return e
@@ -225,12 +255,18 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 			return e
 		}
 	}
+	if e = advance("端口检查"); e != nil {
+		return e
+	}
 	if e = platform.CheckPorts(c, nil); e != nil {
 		return e
 	}
 	rt := runtimeConfig{Email: *email, Firewall: *firewall}
 	if *staging {
 		rt.DirectoryURL = "https://acme-staging-v02.api.letsencrypt.org/directory"
+	}
+	if e = advance("保存凭据与运行配置"); e != nil {
+		return e
 	}
 	if *token != "" {
 		info, e := os.Stat(*token)
@@ -262,6 +298,9 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 	var dnsAPI *cloudflare.Client
 	databaseCommitted := false
 	if c.ManagedDNS {
+		if e = advance("创建或恢复DNS"); e != nil {
+			return e
+		}
 		dnsAPI, e = cloudflare.New(rt.TokenFile)
 		if e != nil {
 			return e
@@ -309,6 +348,9 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 		}
 	}
 	var bundle cert.Bundle
+	if e = advance("申请或导入证书"); e != nil {
+		return e
+	}
 	if *certPath != "" || *keyPath != "" {
 		bundle.Certificate, e = os.ReadFile(*certPath)
 		if e != nil {
@@ -327,8 +369,14 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 			return e
 		}
 	}
+	if e = advance("保存证书"); e != nil {
+		return e
+	}
 	c.CertID, e = cert.Store(filepath.Join(p.Data, "certs"), bundle, c.Domain, time.Now())
 	if e != nil {
+		return e
+	}
+	if e = advance("生成与校验内核配置"); e != nil {
 		return e
 	}
 	server, e := render.Server(c, p.render())
@@ -337,6 +385,9 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 	}
 	client := &core.Client{Binary: p.Core, WorkDir: p.Data, Socket: p.render().Socket}
 	if e = client.Check(ctx, server); e != nil {
+		return e
+	}
+	if e = advance("写入节点配置"); e != nil {
 		return e
 	}
 	if e = os.WriteFile(filepath.Join(p.Data, "active.yaml"), server, 0600); e != nil {
@@ -358,11 +409,17 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 	}
 	databaseCommitted = true
 	if c.ManagedDNS {
+		if e = advance("提交DNS状态"); e != nil {
+			return e
+		}
 		if e = completeDNSChange(ctx, dnsAPI, &host, func() error { return saveHost(p, host) }); e != nil {
 			return e
 		}
 	}
 	if p.Root == "/" {
+		if e = advance("配置服务权限"); e != nil {
+			return e
+		}
 		host.InitPhase = "configured"
 		rememberFirewallIntent(&host, c)
 		if e = saveHost(p, host); e != nil {
@@ -373,7 +430,13 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 		}
 	}
 	if !*noService && p.Root == "/" {
+		if e = advance("安装并启动服务（含防火墙规则）"); e != nil {
+			return e
+		}
 		if e = installUnits(ctx, p); e != nil {
+			return e
+		}
+		if e = advance("服务健康检查"); e != nil {
 			return e
 		}
 		if e = waitReady(ctx, p); e != nil {
@@ -387,9 +450,15 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 		if e = saveHost(p, host); e != nil {
 			return e
 		}
+		if e = saveInstallProgress(p, "完成", true); e != nil {
+			return e
+		}
 	}
 	fmt.Fprintf(out, "初始化完成；订阅 https://%s:%d/s/%s/config.yaml\n", c.Domain, c.SubscriptionPort, c.Token)
 	if *noService || p.Root != "/" {
+		if e = advance("配置已准备，尚未启动服务"); e != nil {
+			return e
+		}
 		fmt.Fprintln(out, "已准备配置，尚未启动服务")
 	}
 	return nil

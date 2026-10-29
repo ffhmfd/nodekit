@@ -113,6 +113,23 @@ func installPackage(ctx context.Context, p paths, args []string, out io.Writer) 
 	return nil
 }
 func resume(ctx context.Context, p paths) error {
+	return resumeWithFirewall(ctx, p, "")
+}
+
+func resumeCommand(ctx context.Context, p paths, args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
+	fs.SetOutput(out)
+	mode := fs.String("firewall", "", "auto or manual; default keeps saved mode")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || *mode != "" && *mode != "auto" && *mode != "manual" {
+		return errors.New("resume [--firewall auto|manual]")
+	}
+	return resumeWithFirewall(ctx, p, *mode)
+}
+
+func resumeWithFirewall(ctx context.Context, p paths, mode string) (resultErr error) {
 	if p.Root != "/" || os.Geteuid() != 0 {
 		return errors.New("resume 需要真实系统 root")
 	}
@@ -127,6 +144,16 @@ func resume(ctx context.Context, p paths) error {
 		return e
 	}
 	defer lock.Close()
+	stage := "恢复安装检查"
+	advance := func(next string) error {
+		stage = next
+		return saveInstallProgress(p, stage, false)
+	}
+	defer func() {
+		if resultErr != nil {
+			resultErr = describeInstallFailure(p, stage, resultErr)
+		}
+	}()
 	m, e := loadHost(p)
 	if e != nil {
 		return e
@@ -143,7 +170,38 @@ func resume(ctx context.Context, p paths) error {
 	if e = preparePermissions(p, m); e != nil {
 		return e
 	}
+	c, e := serviceConfig(ctx, p)
+	if e != nil {
+		return e
+	}
+	rt, e := p.runtime()
+	if e != nil {
+		return e
+	}
+	if mode != "" {
+		rt.Firewall = mode
+	}
+	if e = advance("防火墙预检"); e != nil {
+		return e
+	}
+	if e = checkRecoveryFirewall(ctx, c, rt.Firewall, m, platform.Firewall{}); e != nil {
+		return e
+	}
+	if mode != "" {
+		if e = advance("保存防火墙模式"); e != nil {
+			return e
+		}
+		if e = writeJSON(filepath.Join(p.Etc, "runtime.json"), rt); e != nil {
+			return e
+		}
+		if e = preparePermissions(p, m); e != nil {
+			return e
+		}
+	}
 	if m.DNSOperation != nil {
+		if e = advance("恢复DNS"); e != nil {
+			return e
+		}
 		client, err := dnsClient(p)
 		if err != nil {
 			return err
@@ -152,8 +210,7 @@ func resume(ctx context.Context, p paths) error {
 			return err
 		}
 	}
-	c, e := serviceConfig(ctx, p)
-	if e != nil {
+	if e = advance("恢复节点配置"); e != nil {
 		return e
 	}
 	rememberFirewallIntent(&m, c)
@@ -163,7 +220,13 @@ func resume(ctx context.Context, p paths) error {
 	if _, e = serviceTool(ctx, p, "prepare"); e != nil {
 		return e
 	}
+	if e = advance("安装并启动服务（含防火墙规则）"); e != nil {
+		return e
+	}
 	if e = installUnits(ctx, p); e != nil {
+		return e
+	}
+	if e = advance("服务健康检查"); e != nil {
 		return e
 	}
 	if e = waitReady(ctx, p); e != nil {
@@ -174,7 +237,10 @@ func resume(ctx context.Context, p paths) error {
 		return e
 	}
 	m.InitPhase = "ready"
-	return saveHost(p, m)
+	if e = saveHost(p, m); e != nil {
+		return e
+	}
+	return saveInstallProgress(p, "完成", true)
 }
 func pruneReleases(p paths) error {
 	current, e := os.Readlink(filepath.Join(p.Opt, "current"))

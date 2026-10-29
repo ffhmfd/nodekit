@@ -101,6 +101,14 @@ func testPortableLifecycle(t *testing.T, cloudflare bool) {
 		}
 	}()
 	waitPort(t, cfg.SubscriptionPort)
+	// The diagnostic marker from --no-service must not block a live manager.
+	var links, queryErr bytes.Buffer
+	if code := cli.Run(context.Background(), append(append([]string{}, prefix...), "subscription"), bytes.NewReader(nil), &links, &queryErr); code != 0 {
+		t.Fatal("healthy manually started installation cannot query subscription", queryErr.String())
+	}
+	if !strings.Contains(links.String(), "/s/"+cfg.Token+"/config.yaml") {
+		t.Fatal("live subscription query lost original token")
+	}
 	pool := x509.NewCertPool()
 	pool.AppendCertsFromPEM(trust)
 	tr := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: cfg.Domain}}
