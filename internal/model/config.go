@@ -31,30 +31,37 @@ type Reality struct {
 	Target     string `json:"target"`
 }
 type Config struct {
-	Schema           int        `json:"schema"`
-	Revision         int64      `json:"revision"`
-	Name             string     `json:"name"`
-	DisplayMode      string     `json:"display_mode,omitempty"`
-	CountryCode      string     `json:"country_code,omitempty"`
-	ManagedDNS       bool       `json:"managed_dns,omitempty"`
-	Domain           string     `json:"domain"`
-	Address          string     `json:"address"`
-	IPv6             bool       `json:"ipv6"`
-	Protocols        []Protocol `json:"protocols"`
-	SubscriptionPort int        `json:"subscription_port"`
-	SubscriptionMode string     `json:"subscription_mode,omitempty"`
-	Quota            int64      `json:"quota"`
-	Expiry           *time.Time `json:"expiry,omitempty"`
-	ResetDay         int        `json:"reset_day"`
-	ResetHour        int        `json:"reset_hour"`
-	Token            string     `json:"token"`
-	Reality          Reality    `json:"reality"`
-	CertID           string     `json:"cert_id,omitempty"`
+	Schema           int              `json:"schema"`
+	Revision         int64            `json:"revision"`
+	Name             string           `json:"name"`
+	DisplayMode      string           `json:"display_mode,omitempty"`
+	CountryCode      string           `json:"country_code,omitempty"`
+	ManagedDNS       bool             `json:"managed_dns,omitempty"`
+	Domain           string           `json:"domain"`
+	Address          string           `json:"address"`
+	IPv6             bool             `json:"ipv6"`
+	IPv6Nodes        *IPv6NodesConfig `json:"ipv6_nodes,omitempty"`
+	Protocols        []Protocol       `json:"protocols"`
+	SubscriptionPort int              `json:"subscription_port"`
+	SubscriptionMode string           `json:"subscription_mode,omitempty"`
+	Quota            int64            `json:"quota"`
+	Expiry           *time.Time       `json:"expiry,omitempty"`
+	ResetDay         int              `json:"reset_day"`
+	ResetHour        int              `json:"reset_hour"`
+	Token            string           `json:"token"`
+	Reality          Reality          `json:"reality"`
+	CertID           string           `json:"cert_id,omitempty"`
 }
 
 func (c Config) Clone() Config {
 	out := c
 	out.Protocols = append([]Protocol(nil), c.Protocols...)
+	if c.IPv6Nodes != nil {
+		ipv6 := *c.IPv6Nodes
+		ipv6.Protocols = append([]string(nil), c.IPv6Nodes.Protocols...)
+		ipv6.IPv4ListenAddresses = append([]string(nil), c.IPv6Nodes.IPv4ListenAddresses...)
+		out.IPv6Nodes = &ipv6
+	}
 	if c.Expiry != nil {
 		expiry := *c.Expiry
 		out.Expiry = &expiry
@@ -132,6 +139,9 @@ func (c Config) Validate() error {
 	}
 	if c.Address != "" && net.ParseIP(c.Address) == nil {
 		return errors.New("address must be an IP")
+	}
+	if e := c.validateIPv6Nodes(); e != nil {
+		return e
 	}
 	if e := c.ValidateSubscription(); e != nil {
 		return e

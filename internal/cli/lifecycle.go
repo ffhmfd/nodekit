@@ -267,6 +267,9 @@ func recoverUpgrade(ctx context.Context, p paths, boot bool) error {
 	if _, e = serviceTool(ctx, p, "prepare"); e != nil {
 		return e
 	}
+	if _, e = prepareFirewallStart(ctx, p); e != nil {
+		return e
+	}
 	if boot {
 		_, e = platform.Exec(ctx, "systemctl", "--no-block", "start", "nodekit-manager.service")
 		if e != nil {
@@ -414,6 +417,9 @@ func releaseCommand(ctx context.Context, p paths, args []string, out io.Writer) 
 		return restore(e)
 	}
 	if _, e = serviceTool(ctx, p, "prepare"); e != nil {
+		return restore(e)
+	}
+	if _, e = prepareFirewallStart(ctx, p); e != nil {
 		return restore(e)
 	}
 	if e = services(ctx, "start"); e != nil {

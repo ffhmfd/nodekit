@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"nodekit/internal/model"
 	"os"
 	"os/exec"
@@ -90,66 +91,145 @@ type Binding struct {
 	Network string `json:"network"`
 	Port    int    `json:"port"`
 	IPv6    bool   `json:"ipv6"`
+	Family  string `json:"family,omitempty"`
+	Address string `json:"address,omitempty"`
 }
 
 func Bindings(c model.Config) []Binding {
-	b := []Binding{{"tcp", c.SubscriptionPort, c.IPv6}}
-	for _, p := range c.Protocols {
-		if !p.Enabled {
-			continue
-		}
+	b := []Binding{{Network: "tcp", Port: c.SubscriptionPort, IPv6: c.IPv6}}
+	seen := map[Binding]bool{b[0]: true}
+	for _, endpoint := range c.ListenerEndpoints() {
+		p := endpoint.Protocol
+		networks := []string{"tcp"}
 		switch p.Type {
 		case "ss":
-			b = append(b, Binding{"tcp", p.Port, c.IPv6}, Binding{"udp", p.Port, c.IPv6})
+			networks = []string{"tcp", "udp"}
 		case "tuic", "hysteria2":
-			b = append(b, Binding{"udp", p.Port, c.IPv6})
-		default:
-			b = append(b, Binding{"tcp", p.Port, c.IPv6})
+			networks = []string{"udp"}
+		}
+		for _, network := range networks {
+			v := Binding{Network: network, Port: p.Port, Family: endpoint.Family, Address: endpoint.Address}
+			if endpoint.Family == "legacy" {
+				v.Family, v.Address, v.IPv6 = "", "", c.IPv6
+			}
+			if !seen[v] {
+				b = append(b, v)
+				seen[v] = true
+			}
 		}
 	}
 	return b
 }
 func CheckPorts(c model.Config, previous []Binding) error {
+	return checkPorts(c, previous, func(network, address string) error {
+		if strings.HasPrefix(network, "tcp") {
+			l, err := net.Listen(network, address)
+			if err != nil {
+				return err
+			}
+			return l.Close()
+		}
+		l, err := net.ListenPacket(network, address)
+		if err != nil {
+			return err
+		}
+		return l.Close()
+	})
+}
+
+func (b Binding) validate() error {
+	if (b.Network != "tcp" && b.Network != "udp") || b.Port < 1024 || b.Port > 65535 {
+		return errors.New("invalid firewall binding")
+	}
+	if b.Family != "" && b.Family != "ipv4" && b.Family != "ipv6" || b.Family != "" && b.IPv6 {
+		return errors.New("invalid binding family or contradictory legacy IPv6 flag")
+	}
+	if b.Address != "" {
+		ip, err := netip.ParseAddr(b.Address)
+		if err != nil || ip.Zone() != "" || ip.Is4In6() || b.Family == "" || (b.Family == "ipv4") != ip.Is4() {
+			return errors.New("binding address does not match family")
+		}
+	}
+	return nil
+}
+
+func expandBindings(bindings []Binding) []Binding {
+	var out []Binding
+	seen := map[Binding]bool{}
+	for _, b := range bindings {
+		families := []string{b.Family}
+		if b.Family == "" {
+			families = []string{"ipv4"}
+			if b.IPv6 {
+				families = append(families, "ipv6")
+			}
+		}
+		for _, family := range families {
+			v := b
+			v.Family, v.IPv6 = family, false
+			if !seen[v] {
+				out = append(out, v)
+				seen[v] = true
+			}
+		}
+	}
+	return out
+}
+
+// CoverageDifference is logical socket coverage, not a safe firewall deletion
+// plan. In particular a UFW legacy generic binding can physically own both
+// families even when its old IPv6 flag is false. Use Reconcile for transitions.
+func CoverageDifference(a, b []Binding) []Binding {
+	var out []Binding
+	for _, v := range expandBindings(a) {
+		covered := false
+		for _, old := range expandBindings(b) {
+			if old.Network == v.Network && old.Port == v.Port && old.Family == v.Family && (old.Address == "" || old.Address == v.Address) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func checkPorts(c model.Config, previous []Binding, probe func(string, string) error) error {
 	if e := c.Validate(); e != nil {
 		return e
 	}
-	owned := map[Binding]bool{}
 	for _, b := range previous {
-		owned[b] = true
+		if err := b.validate(); err != nil {
+			return err
+		}
 	}
-	for _, b := range Bindings(c) {
-		if owned[b] {
+	for _, b := range CoverageDifference(Bindings(c), previous) {
+		migration := false
+		// Mihomo's legacy wildcard can occupy both families. Do not try to
+		// rebind it while the old core is running; final core health remains
+		// mandatory. The subscription socket is not a Mihomo listener.
+		for _, old := range previous {
+			if old.Family == "" && old.Network == b.Network && old.Port == b.Port && b.Port != c.SubscriptionPort {
+				migration = true
+				break
+			}
+		}
+		if migration {
 			continue
 		}
-		addr := fmt.Sprintf("0.0.0.0:%d", b.Port)
-		if b.Network == "tcp" {
-			l, e := net.Listen("tcp4", addr)
-			if e != nil {
-				return fmt.Errorf("port occupied tcp/%d: %w", b.Port, e)
+		address, suffix := b.Address, "4"
+		if b.Family == "ipv6" {
+			suffix = "6"
+			if address == "" {
+				address = "::"
 			}
-			l.Close()
-		} else {
-			l, e := net.ListenPacket("udp4", addr)
-			if e != nil {
-				return fmt.Errorf("port occupied udp/%d: %w", b.Port, e)
-			}
-			l.Close()
+		} else if address == "" {
+			address = "0.0.0.0"
 		}
-		if b.IPv6 {
-			addr = fmt.Sprintf("[::]:%d", b.Port)
-			if b.Network == "tcp" {
-				l, e := net.Listen("tcp6", addr)
-				if e != nil {
-					return e
-				}
-				l.Close()
-			} else {
-				l, e := net.ListenPacket("udp6", addr)
-				if e != nil {
-					return e
-				}
-				l.Close()
-			}
+		if err := probe(b.Network+suffix, net.JoinHostPort(address, fmt.Sprint(b.Port))); err != nil {
+			return fmt.Errorf("port occupied %s%s/%d at %s: %w", b.Network, suffix, b.Port, address, err)
 		}
 	}
 	return nil

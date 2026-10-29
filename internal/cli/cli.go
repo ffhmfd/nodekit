@@ -47,7 +47,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		return 0
 	}
 	if args[0] == "capabilities" {
-		if e := json.NewEncoder(out).Encode(capabilities{SubscriptionModes: []string{"direct", "cloudflare"}, Features: []string{"node-names-v1", "managed-dns-v1", "purge-v1", "interactive-cancel-v1"}}); e != nil {
+		if e := json.NewEncoder(out).Encode(capabilities{SubscriptionModes: []string{"direct", "cloudflare"}, Features: []string{"node-names-v1", "managed-dns-v1", "purge-v1", "interactive-cancel-v1", "ipv6-nodes-v1"}}); e != nil {
 			fmt.Fprintln(errOut, e)
 			return 1
 		}
@@ -56,6 +56,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 	known := map[string]bool{"install": true, "resume": true, "recover": true, "inspect": true, "snapshot": true, "prepare": true, "init": true, "serve": true, "status": true, "config": true, "protocol": true, "subscription": true, "usage": true, "cert": true, "logs": true, "firewall": true, "uninstall": true, "upgrade": true, "rollback": true}
 	known["setup"] = true
 	known["dns"] = true
+	known["ipv6"] = true
 	if !known[args[0]] {
 		fmt.Fprintln(errOut, "未知命令:", args[0])
 		return 2
@@ -162,7 +163,7 @@ func execute(ctx context.Context, p paths, args []string, in io.Reader, out io.W
 			return errors.New("usage reset")
 		}
 		return p.admin(ctx, "POST", "/usage/reset", nil, nil)
-	case "config", "protocol", "subscription", "cert":
+	case "config", "protocol", "subscription", "cert", "ipv6":
 		return edit(ctx, p, args, out)
 	case "logs":
 		cmd := exec.CommandContext(ctx, "journalctl", "-u", "nodekit-core", "-u", "nodekit-manager", "-n", "100", "--no-pager")
@@ -216,7 +217,7 @@ func execute(ctx context.Context, p paths, args []string, in io.Reader, out io.W
 			} else if !errors.Is(lockErr, platform.ErrLocked) {
 				return lockErr
 			}
-			return f.Apply(ctx, rules)
+			return f.Apply(ctx, firewallApplyBindings(m))
 		}
 		if args[1] == "remove" {
 			return f.Remove(ctx, rules)
@@ -230,6 +231,10 @@ func execute(ctx context.Context, p paths, args []string, in io.Reader, out io.W
 	return errors.New("unsupported command")
 }
 func edit(ctx context.Context, p paths, args []string, out io.Writer) error {
+	return editWithIPv6Deps(ctx, p, args, out, defaultIPv6Deps())
+}
+
+func editWithIPv6Deps(ctx context.Context, p paths, args []string, out io.Writer, deps ipv6Deps) error {
 	if p.Root == "/" && os.Geteuid() == 0 {
 		lock, e := operationLock(p)
 		if e != nil {
@@ -242,10 +247,18 @@ func edit(ctx context.Context, p paths, args []string, out io.Writer) error {
 	}
 	var c model.Config
 	if e := p.admin(ctx, "GET", "/config", nil, &c); e != nil {
+		if args[0] == "ipv6" {
+			return fmt.Errorf("请先完成IPv4初始化，并确认管理服务运行：%w", e)
+		}
 		return e
 	}
 	old := c.Clone()
 	switch args[0] {
+	case "ipv6":
+		changed, err := changeIPv6Config(&c, args[1:], out, deps)
+		if err != nil || !changed {
+			return err
+		}
 	case "subscription":
 		if len(args) == 1 {
 			fmt.Fprintf(out, "完整配置: https://%s:%d/s/%s/config.yaml\n纯节点: https://%s:%d/s/%s/proxies.yaml\n", c.Domain, c.SubscriptionPort, c.Token, c.Domain, c.SubscriptionPort, c.Token)
@@ -421,6 +434,9 @@ func edit(ctx context.Context, p paths, args []string, out io.Writer) error {
 	if e := c.Validate(); e != nil {
 		return e
 	}
+	if e := validateLocalIPv6Nodes(c, deps); e != nil {
+		return e
+	}
 	if c.CertID != "" && !(old.ManagedDNS && c.Domain != old.Domain) {
 		b, e := cert.Load(filepath.Join(p.Data, "certs"), c.CertID)
 		if e != nil {
@@ -430,12 +446,19 @@ func edit(ctx context.Context, p paths, args []string, out io.Writer) error {
 			return fmt.Errorf("域名证书不匹配，先申请对应证书再导入配置: %w", e)
 		}
 	}
-	if e := platform.CheckPorts(c, platform.Bindings(old)); e != nil {
+	if e := deps.CheckPorts(c, platform.Bindings(old)); e != nil {
 		return e
 	}
 	rt, e := p.runtime()
 	if e != nil {
 		return e
+	}
+	commitRequirement, abortRequirement := func() error { return nil }, func() error { return nil }
+	if p.Root == "/" && os.Geteuid() == 0 {
+		commitRequirement, abortRequirement, e = beginIPv6Requirement(p, old, c)
+		if e != nil {
+			return e
+		}
 	}
 	commitFirewall, abortFirewall := func() error { return nil }, func() error { return nil }
 	if rt.Firewall != "manual" {
@@ -444,8 +467,21 @@ func edit(ctx context.Context, p paths, args []string, out io.Writer) error {
 		}
 		commitFirewall, abortFirewall, e = beginFirewallChange(ctx, p, old, c)
 		if e != nil {
+			if m, err := loadHost(p); err == nil && m.PendingFirewall == nil {
+				return errors.Join(e, abortRequirement())
+			}
 			return e
 		}
+	}
+	finishRules, undoRules := commitFirewall, abortFirewall
+	commitFirewall = func() error {
+		if err := finishRules(); err != nil {
+			return err
+		}
+		return commitRequirement()
+	}
+	abortFirewall = func() error {
+		return abortConfigChange(p, old, c, undoRules, abortRequirement)
 	}
 	if (old.ManagedDNS || c.ManagedDNS) && model.DNSFieldsChanged(old, c) {
 		if !old.ManagedDNS {
@@ -508,6 +544,10 @@ func installUnits(ctx context.Context, p paths) error {
 		return e
 	}
 	if e = checkOwnedFiles(m); e != nil {
+		return e
+	}
+	m, e = prepareFirewallStart(ctx, p)
+	if e != nil {
 		return e
 	}
 	files, e := unitFiles(p)

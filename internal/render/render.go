@@ -18,19 +18,13 @@ func Server(c model.Config, p Paths) ([]byte, error) {
 		p.Certificate = filepath.Join(p.WorkDir, "certs", c.CertID, "cert.pem")
 		p.PrivateKey = filepath.Join(p.WorkDir, "certs", c.CertID, "key.pem")
 	}
-	listen := "0.0.0.0"
-	if c.IPv6 {
-		listen = "::"
-	}
-	for _, n := range c.Protocols {
-		if !n.Enabled {
-			continue
-		}
+	for _, endpoint := range c.ListenerEndpoints() {
+		n := endpoint.Protocol
 		typ := n.Type
 		if typ == "ss" {
 			typ = "shadowsocks"
 		}
-		l := obj{"name": "nodekit-" + n.Type, "type": typ, "listen": listen, "port": n.Port}
+		l := obj{"name": endpoint.Name, "type": typ, "listen": endpoint.Address, "port": n.Port}
 		switch n.Type {
 		case "vless":
 			l["users"] = []obj{{"username": "personal", "uuid": n.UUID, "flow": "xtls-rprx-vision"}}
@@ -60,13 +54,14 @@ func Subscription(c model.Config, provider bool) ([]byte, error) {
 	}
 	nodes := []obj{}
 	names := []string{}
-	for _, n := range c.Protocols {
-		if !n.Enabled {
-			continue
-		}
-		name := c.NodeName(n)
+	appendNode := func(n model.Protocol, name, address, family string) {
 		names = append(names, name)
-		v := obj{"name": name, "type": n.Type, "server": c.NodeAddress(), "port": n.Port, "udp": true}
+		v := obj{"name": name, "type": n.Type, "server": address, "port": n.Port, "udp": true}
+		if c.IPv6Nodes != nil && family == "ipv4" {
+			// A direct-mode domain may have AAAA records. Enabling client IPv6
+			// must not silently turn an original IPv4 node into an IPv6 dial.
+			v["ip-version"] = "ipv4"
+		}
 		switch n.Type {
 		case "vless":
 			v["uuid"] = n.UUID
@@ -93,6 +88,16 @@ func Subscription(c model.Config, provider bool) ([]byte, error) {
 		}
 		nodes = append(nodes, v)
 	}
+	for _, n := range c.Protocols {
+		if n.Enabled {
+			appendNode(n, c.NodeName(n), c.NodeAddress(), "ipv4")
+		}
+	}
+	for _, n := range c.Protocols {
+		if c.IPv6ProtocolEnabled(n.Type) {
+			appendNode(n, c.IPv6NodeName(n), c.IPv6Nodes.Address, "ipv6")
+		}
+	}
 	result := obj{"proxies": nodes}
 	if !provider {
 		choices := append([]string{}, names...)
@@ -100,10 +105,10 @@ func Subscription(c model.Config, provider bool) ([]byte, error) {
 			choices = []string{"REJECT"}
 		}
 		result["mode"] = "rule"
-		result["ipv6"] = c.IPv6
+		result["ipv6"] = c.IPv6 || c.HasIPv6Nodes()
 		result["proxy-groups"] = []obj{{"name": "节点选择", "type": "select", "proxies": append([]string{"自动选择", "故障切换"}, choices...)}, {"name": "自动选择", "type": "url-test", "proxies": choices, "url": "https://www.gstatic.com/generate_204", "interval": 300}, {"name": "故障切换", "type": "fallback", "proxies": choices, "url": "https://www.gstatic.com/generate_204", "interval": 300}}
 		result["rules"] = []string{"IP-CIDR,127.0.0.0/8,DIRECT,no-resolve", "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve", "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve", "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve", "IP-CIDR,169.254.0.0/16,DIRECT,no-resolve", "IP-CIDR6,::1/128,DIRECT,no-resolve", "IP-CIDR6,fc00::/7,DIRECT,no-resolve", "IP-CIDR6,fe80::/10,DIRECT,no-resolve", "MATCH,节点选择"}
-		result["dns"] = obj{"enable": true, "ipv6": c.IPv6, "nameserver": []string{"https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"}}
+		result["dns"] = obj{"enable": true, "ipv6": c.IPv6 || c.HasIPv6Nodes(), "nameserver": []string{"https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"}}
 	}
 	return yaml.Marshal(result)
 }

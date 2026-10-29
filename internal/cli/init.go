@@ -364,7 +364,7 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 	}
 	if p.Root == "/" {
 		host.InitPhase = "configured"
-		host.Firewall = platform.Bindings(c)
+		rememberFirewallIntent(&host, c)
 		if e = saveHost(p, host); e != nil {
 			return e
 		}
@@ -377,6 +377,10 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 			return e
 		}
 		if e = waitReady(ctx, p); e != nil {
+			return e
+		}
+		host, e = loadHost(p)
+		if e != nil {
 			return e
 		}
 		host.InitPhase = "ready"

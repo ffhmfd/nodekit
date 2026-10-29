@@ -42,7 +42,7 @@ func menuInitial(ctx context.Context, p paths, in io.Reader, out, errOut io.Writ
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
 	for ctx.Err() == nil {
-		fmt.Fprintln(out, "\nNodeKit\n1 初始化安装\n2 状态\n3 订阅链接\n4 手动清零\n5 修改额度\n6 修改到期时间\n7 每月清零安排\n8 协议管理\n9 更新证书\n10 查看日志\n11 升级程序\n12 回滚版本\n13 保留数据卸载\n14 恢复未完成升级\n15 恢复保留的安装\n16 修改订阅模式\n17 修改节点公网 IP\n18 修改订阅端口\n19 修改名称/国旗\n20 修改 REALITY\n21 彻底卸载\n22 DNS管理/恢复\n23 继续未完成安装向导\n0 退出\n主菜单 Ctrl+C 退出；配置输入 Ctrl+C 返回")
+		fmt.Fprintln(out, "\nNodeKit\n1 初始化安装\n2 状态\n3 订阅链接\n4 手动清零\n5 修改额度\n6 修改到期时间\n7 每月清零安排\n8 协议管理\n9 更新证书\n10 查看日志\n11 升级程序\n12 回滚版本\n13 保留数据卸载\n14 恢复未完成升级\n15 恢复保留的安装\n16 修改订阅模式\n17 修改节点公网 IP\n18 修改订阅端口\n19 修改名称/国旗\n20 修改 REALITY\n21 彻底卸载\n22 DNS管理/恢复\n23 继续未完成安装向导\n24 IPv6节点管理\n0 退出\n主菜单 Ctrl+C 退出；配置输入 Ctrl+C 返回")
 		var choice string
 		var err error
 		if initial != "" {
@@ -219,6 +219,8 @@ func menuAction(ctx context.Context, p paths, s *terminal.Session, choice string
 		args = []string{"dns", action}
 	case "23":
 		args = []string{"setup", "--resume"}
+	case "24":
+		return ipv6Menu(ctx, p, s, out, defaultIPv6Deps())
 	default:
 		fmt.Fprintln(out, "无效选项")
 		return nil

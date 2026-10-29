@@ -6,7 +6,6 @@ import (
 	"nodekit/internal/testutil"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -26,21 +25,12 @@ func TestReleasePermissionsIgnoreRestrictiveUmask(t *testing.T) {
 	}
 }
 func TestUFWExactPortOwnership(t *testing.T) {
-	var added bool
-	f := Firewall{Run: func(_ context.Context, args ...string) ([]byte, error) {
-		line := strings.Join(args, " ")
-		if line == "ufw status" {
-			return []byte("Status: active\n24446/tcp ALLOW Anywhere # nodekit:tcp:24446\n"), nil
-		}
-		if strings.Contains(line, "port 2444 comment nodekit:tcp:2444") {
-			added = true
-		}
-		return nil, nil
-	}}
+	s := &familyFirewall{ufw: true, rules: map[string]bool{"tcp 24446 any nodekit:tcp:24446": true}}
+	f := Firewall{Run: s.run}
 	if e := f.Apply(context.Background(), []Binding{{Network: "tcp", Port: 2444}}); e != nil {
 		t.Fatal(e)
 	}
-	if !added {
+	if !s.rules["tcp 2444 0.0.0.0/0 nodekit:tcp:2444"] {
 		t.Fatal("port prefix collision skipped new rule")
 	}
 }

@@ -27,7 +27,7 @@ Linux VPS 节点管理工具：Bash 安装入口、Go 中文向导和独立 miho
 
 ```bash
 bash scripts/build.sh test ./...
-bash scripts/package.sh v0.2.0
+bash scripts/package.sh v0.3.0
 ```
 
 构建缓存和发布包默认存于源码目录的上一级，分别为 `cache/`、`modules/`、`tmp/`、`dist/`。可以设置 `NODEKIT_BUILD_ROOT`。本项目开发优先在 VPS 的专用临时目录进行构建。
@@ -37,13 +37,13 @@ bash scripts/package.sh v0.2.0
 ## 安装与初始化
 
 ```bash
-# 官方发布仓库
+# 官方发布仓库。
 repo=ffhmfd/nodekit
 curl -fLsS --proto '=https' --proto-redir '=https' "https://github.com/$repo/releases/latest/download/install.sh" -o install.sh
 sudo bash install.sh --repo "$repo"
-# 可用 --version v0.2.1 固定版本。
+# 可用 --version v0.3.0 固定版本。
 # 离线安装仍支持：
-sudo bash install.sh --file nodekit-v0.2.1-linux-amd64.tar.gz --sha256 <可信的SHA256>
+sudo bash install.sh --file nodekit-v0.3.0-linux-amd64.tar.gz --sha256 <可信的SHA256>
 sudo nodekit setup
 ```
 
@@ -146,6 +146,29 @@ sudo nodekit setup --resume
 完整订阅：`https://域名:端口/s/token/config.yaml`。FlClash 中添加为远程配置。
 
 纯节点：`https://域名:端口/s/token/proxies.yaml`，适用于 `proxy-providers`。provider 元信息的 UI 显示由客户端决定。完整模板含手动选择、自动选择、故障切换，基础分流为局域网直连、其他走代理。
+
+## 安装后添加 IPv6 节点
+
+先完成原有 IPv4 初始化，再打开管理菜单的 **24 IPv6节点管理**。初始向导不会自动启用 IPv6，也不会默认复制 IPv4 的协议选择。菜单可查看状态、配置/选择协议、重新启用已保存的选择或关闭 IPv6。
+
+```bash
+sudo nodekit ipv6 status
+sudo nodekit ipv6 configure --address '<本机已分配的公网IPv6>' --protocols vless,hy2
+sudo nodekit ipv6 disable
+sudo nodekit ipv6 enable             # 使用已保存的 IPv6 地址和协议选择
+```
+
+IPv6 可独立选择 VLESS、SS2022、TUIC、Hysteria2、AnyTLS，包括 IPv4 没有启用的协议。修改某一地址族的协议启停不改变另一组；同协议的端口、密码/UUID、REALITY 参数及证书共用，因此修改这些共用参数会同时作用于两类入口。
+
+IPv4 节点名称、订阅 URL 和 Token 保持不变；新增节点名称追加 ` · IPv6`，完整配置和纯节点 provider 都通过原订阅提供。两类入口共用原有用量、额度、到期及每月清零，不重复计算。使用 IPv6 节点的客户端网络必须具备 IPv6 连接能力；provider 使用者也应检查自己的客户端 IPv6 设置。
+
+必须使用网卡上已分配且有效的公网 IPv6，不能填写链路本地、ULA、回环、文档地址或未分配的地址。程序不会修改网卡、路由、sysctl 或云安全组；使用自动防火墙时只维护项目规则，云端 IPv6 入站规则仍需自行放行。节点是 **IPv6 连接入口**，不是强制网站流量走 IPv6 出口，不需要为订阅域名新增 AAAA。
+
+首次启用会将核心的通配监听转换为明确 IPv4/IPv6 地址监听，避免未选择协议被另一地址族意外开放；过程中可能出现短暂连接重建。IPv4 公网地址经 NAT 映射时，使用本机实际 IPv4 地址监听。关闭 IPv6 会移除新增入口和订阅条目，但保留选择及明确 IPv4 监听；不会重置 IPv4 节点、凭据、证书或用量。
+
+若 VPS 的网卡地址发生变化，请重新配置并选择当前已分配的地址。为避免启用客户端 IPv6 后原域名节点通过 AAAA 改走 IPv6，配置此功能后的原节点锁定 IPv4 解析；新增 IPv6 节点仍使用明确的 IPv6 地址。
+
+旧配置不会自动迁移或启用此功能。原来已使用旧 `--ipv6` 监听方式的安装保持旧行为，不直接叠加新的菜单配置。保存过新 IPv6 设置的安装需要支持 `ipv6-nodes-v1` 的程序处理升级、回滚和保留数据重装，即使暂时关闭 IPv6 也不能用旧程序悄悄丢弃设置。
 
 ## 流量与时间语义
 

@@ -156,7 +156,7 @@ func resume(ctx context.Context, p paths) error {
 	if e != nil {
 		return e
 	}
-	m.Firewall = platform.Bindings(c)
+	rememberFirewallIntent(&m, c)
 	if e = saveHost(p, m); e != nil {
 		return e
 	}
@@ -167,6 +167,10 @@ func resume(ctx context.Context, p paths) error {
 		return e
 	}
 	if e = waitReady(ctx, p); e != nil {
+		return e
+	}
+	m, e = loadHost(p)
+	if e != nil {
 		return e
 	}
 	m.InitPhase = "ready"

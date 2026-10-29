@@ -42,6 +42,10 @@ func (c Config) NodeName(p Protocol) string {
 	return c.Name + "-" + p.Type
 }
 
+func (c Config) IPv6NodeName(p Protocol) string {
+	return c.NodeName(p) + " · IPv6"
+}
+
 func validDisplay(s string) bool {
 	if strings.TrimSpace(s) == "" || len(s) > 256 {
 		return false
@@ -60,10 +64,24 @@ func (c Config) validateDisplay() error {
 		return errors.New("country must be a two-letter uppercase code or empty")
 	}
 	names := map[string]bool{"节点选择": true, "自动选择": true, "故障切换": true, "DIRECT": true, "REJECT": true, "REJECT-DROP": true, "PASS": true, "COMPATIBLE": true, "GLOBAL": true}
+	originalNames := map[string]bool{}
 	for _, p := range c.Protocols {
 		name := c.NodeName(p)
-		if !validDisplay(name) || names[name] {
+		if !validDisplay(name) || names[name] || originalNames[name] {
 			return errors.New("invalid, duplicate or reserved node name")
+		}
+		originalNames[name] = true
+		if p.Enabled {
+			names[name] = true
+		}
+	}
+	for _, p := range c.Protocols {
+		if !c.IPv6ProtocolEnabled(p.Type) {
+			continue
+		}
+		name := c.IPv6NodeName(p)
+		if !validDisplay(name) || names[name] {
+			return errors.New("invalid, duplicate or reserved IPv6 node name")
 		}
 		names[name] = true
 	}

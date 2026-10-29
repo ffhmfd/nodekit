@@ -2,7 +2,6 @@ package platform
 
 import (
 	"context"
-	"errors"
 	"net"
 	"nodekit/internal/model"
 	"os"
@@ -43,19 +42,11 @@ func TestPortConflictAndOwnedDirectory(t *testing.T) {
 }
 func TestFirewallOwnsOnlyPreciseRules(t *testing.T) {
 	var commands []string
-	run := func(_ context.Context, args ...string) ([]byte, error) {
+	state := &familyFirewall{rules: map[string]bool{}}
+	run := func(ctx context.Context, args ...string) ([]byte, error) {
 		s := strings.Join(args, " ")
 		commands = append(commands, s)
-		if s == "ufw status" {
-			return []byte("Status: inactive"), nil
-		}
-		if s == "iptables -S INPUT" {
-			return []byte("-P INPUT ACCEPT\n-A INPUT -j REJECT\n"), nil
-		}
-		if strings.Contains(s, " -C ") {
-			return nil, errors.New("absent")
-		}
-		return nil, nil
+		return state.run(ctx, args...)
 	}
 	f := Firewall{Run: run}
 	b := []Binding{{Network: "tcp", Port: 24441}, {Network: "udp", Port: 24442}}

@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"nodekit/internal/meter"
 	"nodekit/internal/model"
 	"os"
@@ -190,6 +192,7 @@ func (c *Client) Health(ctx context.Context, cfg model.Config) error {
 		}
 	}
 	found := map[string]bool{}
+	legacy := map[string]bool{}
 	for _, network := range []string{"tcp", "tcp6", "udp", "udp6"} {
 		b, e := os.ReadFile("/proc/net/" + network)
 		if e != nil {
@@ -207,16 +210,22 @@ func (c *Client) Health(ctx context.Context, cfg model.Config) error {
 			if len(addr) != 2 {
 				continue
 			}
-			p, e := strconv.ParseInt(addr[1], 16, 32)
+			p, e := strconv.ParseUint(addr[1], 16, 16)
+			if e != nil {
+				continue
+			}
+			legacy[fmt.Sprintf("%s:%d", strings.TrimSuffix(network, "6"), p)] = true
+			if strings.HasPrefix(network, "udp") && f[3] != "07" {
+				continue
+			}
+			address, e := procAddress(addr[0])
 			if e == nil {
-				found[fmt.Sprintf("%s:%d", strings.TrimSuffix(network, "6"), p)] = true
+				found[fmt.Sprintf("%s/%s/%d", network, address, p)] = true
 			}
 		}
 	}
-	for _, p := range cfg.Protocols {
-		if !p.Enabled {
-			continue
-		}
+	for _, endpoint := range cfg.ListenerEndpoints() {
+		p := endpoint.Protocol
 		networks := []string{"tcp"}
 		if p.Type == "ss" {
 			networks = []string{"tcp", "udp"}
@@ -224,10 +233,42 @@ func (c *Client) Health(ctx context.Context, cfg model.Config) error {
 			networks = []string{"udp"}
 		}
 		for _, n := range networks {
-			if !found[fmt.Sprintf("%s:%d", n, p.Port)] {
-				return fmt.Errorf("core listener unavailable: %s %s/%d", p.Type, n, p.Port)
+			if endpoint.Family == "legacy" {
+				if !legacy[fmt.Sprintf("%s:%d", n, p.Port)] {
+					return fmt.Errorf("core listener unavailable: %s %s/%d", p.Type, n, p.Port)
+				}
+				continue
+			}
+			network := n
+			if endpoint.Family == "ipv6" {
+				network += "6"
+			}
+			if !found[fmt.Sprintf("%s/%s/%d", network, endpoint.Address, p.Port)] {
+				return fmt.Errorf("core listener unavailable: %s %s %s", endpoint.Name, network, net.JoinHostPort(endpoint.Address, strconv.Itoa(p.Port)))
 			}
 		}
 	}
 	return nil
+}
+
+// Linux prints each address as native-endian 32-bit words, including tcp6/udp6.
+// Decoding the entire IPv6 value as network-order hex reverses every word on
+// little-endian hosts and can mistake a different address for the listener.
+func procAddress(s string) (netip.Addr, error) {
+	if len(s) != 8 && len(s) != 32 {
+		return netip.Addr{}, errors.New("invalid proc socket address length")
+	}
+	b := make([]byte, len(s)/2)
+	for i := 0; i < len(s); i += 8 {
+		word, err := strconv.ParseUint(s[i:i+8], 16, 32)
+		if err != nil {
+			return netip.Addr{}, err
+		}
+		binary.NativeEndian.PutUint32(b[i/2:], uint32(word))
+	}
+	address, ok := netip.AddrFromSlice(b)
+	if !ok {
+		return netip.Addr{}, errors.New("invalid proc socket address")
+	}
+	return address, nil
 }

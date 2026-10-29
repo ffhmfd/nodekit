@@ -96,8 +96,18 @@ func TestMenuCtrlCReturnsThenAcceptsNewInput(t *testing.T) {
 		master.Write([]byte("unsaved\x03"))
 		wait("请输入编号")
 	}
+	master.Write([]byte("24\n"))
+	wait("请选择")
+	master.Write([]byte("unsaved\x03"))
+	wait("请输入编号")
+	master.Write([]byte("24\n"))
+	wait("请选择")
+	master.Write([]byte("0\n"))
+	wait("请输入编号")
 	master.Write([]byte("99\n"))
-	wait("无效选项")
+	// The invalid-choice message is still inside the action's signal scope.
+	// Wait for the next input scope before testing main-menu Ctrl+C exit.
+	wait("请输入编号")
 	master.Write([]byte{3})
 	select {
 	case err := <-done:

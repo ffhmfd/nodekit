@@ -43,7 +43,52 @@ func atomicFile(path string, b []byte) error {
 	defer dir.Close()
 	return dir.Sync()
 }
-func (m *Manager) restore(ctx context.Context, old model.Config) error {
+func needsListenerReset(old, next model.Config) bool {
+	if old.IPv6Nodes == nil && next.IPv6Nodes == nil {
+		return false
+	}
+	a, b := old.ListenerEndpoints(), next.ListenerEndpoints()
+	if len(a) != len(b) {
+		return true
+	}
+	for i, endpoint := range a {
+		other := b[i]
+		if endpoint.Name != other.Name || endpoint.Address != other.Address || endpoint.Family != other.Family || endpoint.Protocol.Type != other.Protocol.Type || endpoint.Protocol.Port != other.Protocol.Port {
+			return true
+		}
+	}
+	return false
+}
+
+// Pinned mihomo reloads listeners in map order and does not propagate bind
+// failures. Remove old wildcard sockets before creating specific same-port
+// sockets. Call only after writing the recovery intent, including on rollback.
+func (m *Manager) resetListeners(ctx context.Context, config model.Config) error {
+	empty := config.Clone()
+	for i := range empty.Protocols {
+		empty.Protocols[i].Enabled = false
+	}
+	if empty.IPv6Nodes != nil {
+		empty.IPv6Nodes.Enabled = false
+	}
+	b, err := render.Server(empty, m.paths)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(m.paths.WorkDir, "listener-drain.yaml")
+	if err := atomicFile(path, b); err != nil {
+		return err
+	}
+	defer os.Remove(path)
+	return m.core.Apply(ctx, path)
+}
+
+func (m *Manager) restore(ctx context.Context, old model.Config, reset bool) error {
+	if reset {
+		if err := m.resetListeners(ctx, old); err != nil {
+			return err
+		}
+	}
 	b, e := render.Server(old, m.paths)
 	if e != nil {
 		return e
@@ -67,7 +112,7 @@ func (m *Manager) Recover(ctx context.Context) error {
 	if r.Operation == nil {
 		return nil
 	}
-	if e = m.restore(ctx, r.Operation.Old); e != nil {
+	if e = m.restore(ctx, r.Operation.Old, needsListenerReset(r.Operation.Old, r.Operation.New)); e != nil {
 		return fmt.Errorf("pending operation recovery failed: %w", e)
 	}
 	return m.db.Update(func(r *store.Record) error {
@@ -106,6 +151,7 @@ func (m *Manager) change(ctx context.Context, c model.Config, coordinated bool) 
 		return e
 	}
 	old := r.Config
+	reset := needsListenerReset(old, c)
 	c.Revision++
 	b, e := render.Server(c, m.paths)
 	if e != nil {
@@ -142,7 +188,7 @@ func (m *Manager) change(ctx context.Context, c model.Config, coordinated bool) 
 	fail := func(cause error) error {
 		rollbackCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		restoreErr := m.restore(rollbackCtx, old)
+		restoreErr := m.restore(rollbackCtx, old, reset)
 		dbErr := m.db.Update(func(r *store.Record) error {
 			if restoreErr == nil {
 				r.Operation = nil
@@ -155,6 +201,11 @@ func (m *Manager) change(ctx context.Context, c model.Config, coordinated bool) 
 			return nil
 		})
 		return errors.Join(cause, restoreErr, dbErr)
+	}
+	if reset {
+		if e = m.resetListeners(ctx, old); e != nil {
+			return fail(e)
+		}
 	}
 	if e = m.core.Apply(ctx, path); e != nil {
 		return fail(e)
