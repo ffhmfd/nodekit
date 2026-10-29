@@ -100,15 +100,11 @@ func Subscription(c model.Config, provider bool) ([]byte, error) {
 	}
 	result := obj{"proxies": nodes}
 	if !provider {
-		choices := append([]string{}, names...)
-		if len(choices) == 0 {
-			choices = []string{"REJECT"}
+		for key, value := range clientRouting(c, names) {
+			result[key] = value
 		}
-		result["mode"] = "rule"
-		result["ipv6"] = c.IPv6 || c.HasIPv6Nodes()
-		result["proxy-groups"] = []obj{{"name": "节点选择", "type": "select", "proxies": append([]string{"自动选择", "故障切换"}, choices...)}, {"name": "自动选择", "type": "url-test", "proxies": choices, "url": "https://www.gstatic.com/generate_204", "interval": 300}, {"name": "故障切换", "type": "fallback", "proxies": choices, "url": "https://www.gstatic.com/generate_204", "interval": 300}}
-		result["rules"] = []string{"IP-CIDR,127.0.0.0/8,DIRECT,no-resolve", "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve", "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve", "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve", "IP-CIDR,169.254.0.0/16,DIRECT,no-resolve", "IP-CIDR6,::1/128,DIRECT,no-resolve", "IP-CIDR6,fc00::/7,DIRECT,no-resolve", "IP-CIDR6,fe80::/10,DIRECT,no-resolve", "MATCH,节点选择"}
-		result["dns"] = obj{"enable": true, "ipv6": c.IPv6 || c.HasIPv6Nodes(), "nameserver": []string{"https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"}}
+		result["dns"] = clientDNS(c.IPv6 || c.HasIPv6Nodes())
+		result["sniffer"] = clientSniffer()
 	}
 	return yaml.Marshal(result)
 }

@@ -27,7 +27,7 @@ Linux VPS 节点管理工具：Bash 安装入口、Go 中文向导和独立 miho
 
 ```bash
 bash scripts/build.sh test ./...
-bash scripts/package.sh v0.3.0
+bash scripts/package.sh v0.4.0
 ```
 
 构建缓存和发布包默认存于源码目录的上一级，分别为 `cache/`、`modules/`、`tmp/`、`dist/`。可以设置 `NODEKIT_BUILD_ROOT`。本项目开发优先在 VPS 的专用临时目录进行构建。
@@ -41,9 +41,9 @@ bash scripts/package.sh v0.3.0
 repo=ffhmfd/nodekit
 curl -fLsS --proto '=https' --proto-redir '=https' "https://github.com/$repo/releases/latest/download/install.sh" -o install.sh
 sudo bash install.sh --repo "$repo"
-# 可用 --version v0.3.0 固定版本。
+# 可用 --version v0.4.0 固定版本。
 # 离线安装仍支持：
-sudo bash install.sh --file nodekit-v0.3.0-linux-amd64.tar.gz --sha256 <可信的SHA256>
+sudo bash install.sh --file nodekit-v0.4.0-linux-amd64.tar.gz --sha256 <可信的SHA256>
 sudo nodekit setup
 ```
 
@@ -145,7 +145,22 @@ sudo nodekit setup --resume
 
 完整订阅：`https://域名:端口/s/token/config.yaml`。FlClash 中添加为远程配置。
 
-纯节点：`https://域名:端口/s/token/proxies.yaml`，适用于 `proxy-providers`。provider 元信息的 UI 显示由客户端决定。完整模板含手动选择、自动选择、故障切换，基础分流为局域网直连、其他走代理。
+纯节点：`https://域名:端口/s/token/proxies.yaml`，适用于 `proxy-providers`。provider 仍只含 `proxies`，节点、凭据及用量展示与完整订阅一致，不覆盖使用者自己的分流、DNS 或嗅探；元信息的 UI 显示由客户端决定。
+
+### 完整订阅分流、DNS 与嗅探
+
+`config.yaml` 采用以下客户端策略（服务端仍为 `MATCH,DIRECT`）：
+
+- 保留“节点选择”“自动选择”“故障切换”。YouTube、Telegram 的“电报信息”和最终兜底“漏网之鱼”默认跟随“节点选择”；“节点选择”和“漏网之鱼”可手动选择 `DIRECT`。
+- “ChatGPT”组用于 OpenAI、Gemini/Bard，排除已知 `CountryCode=HK` 或名称含香港标记的节点。没有合格候选时使用 `REJECT`，不回退香港节点或直连；未知国家不代表支持 AI 解锁。全部协议关闭时，代理候选同样使用 `REJECT`，直连规则仍然有效。
+- YouTube、AI 专项规则优先，其后为应用/面板及私有域名直连、广告拦截、境外域名代理、国内域名与局域网/国内 IP 直连、Telegram IP 专项和最终兜底。“全球拦截”默认 `REJECT`，可手动改为 `DIRECT`。**Apple/iCloud 默认走“节点选择”（代理），不是直连。** IPv4/IPv6 私网保护保留，未启用 QUIC 拦截。
+- 新业务组与自定义节点重名时，仅策略组追加无冲突后缀，节点名称和凭据不变。
+- DNS 使用 `fake-ip` 模式、`198.18.0.1/16`、国内 bootstrap 和 DoT 上游；保留过滤列表 `["*", "+.lan", "+.local"]`。锁定内核 `v1.19.33` 实测中，`*` 匹配单标签名称，不是所有域名：普通多标签域名仍返回 fake-IP，`.lan`/`.local` 及其子域名返回真实解析结果。不能据此宣称消除了 DNS 污染或泄漏。
+- 开启 DNS 映射、纯 IP 嗅探和目标覆盖；HTTP 嗅探 80、8080–8880，TLS/QUIC 嗅探 443、8443。不额外开放 LAN、控制 API、客户端端口或 TUN。顶层及 DNS 的 IPv6 继续由原 IPv6 开关或已启用的 IPv6 节点决定，原 IPv4 节点的解析约束保留。
+
+完整模板依赖 Loyalsoldier 的 11 个远程 rule-provider（每日更新），以及 mihomo 的 GEOSITE（YouTube/OpenAI）和 GEOIP（LAN/CN）支持。客户端首次启动可能下载规则及缺失的 Geo 数据，后续也需要更新；资源不可达或下载失败会影响加载与分流。模板并非离线规则包，也不保证目标网站或节点实际可达。
+
+**应用新版策略：先将 VPS 管理器升级到包含此改造的版本，再在客户端刷新原 `config.yaml` 地址。** URL/Token、节点身份与用量/到期展示不变，无需新建订阅地址；仅修改本地源码不会更新已部署 VPS 的响应。只需要节点、不想更换现有客户端策略时，继续使用原 `proxies.yaml`。
 
 ## 安装后添加 IPv6 节点
 

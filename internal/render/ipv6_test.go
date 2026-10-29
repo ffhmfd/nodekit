@@ -151,18 +151,18 @@ func TestIPv6SubscriptionsAppendUnchangedCredentialsAndGroups(t *testing.T) {
 			if out["ipv6"] != true || out["dns"].(obj)["ipv6"] != true {
 				t.Fatal("IPv6 client support/DNS not enabled")
 			}
-			for i, raw := range out["proxy-groups"].([]any) {
-				var got []string
-				for _, name := range raw.(obj)["proxies"].([]any) {
-					got = append(got, name.(string))
+			groups := routingGroups(t, out)
+			for _, name := range []string{"节点选择", "自动选择", "故障切换"} {
+				got := routingChoices(t, groups, name)
+				want := names
+				if name == "节点选择" {
+					want = append(append([]string{"自动选择", "故障切换"}, names...), "DIRECT")
 				}
-				if i == 0 {
-					got = got[2:]
-				}
-				if !reflect.DeepEqual(got, names) {
-					t.Fatalf("group omitted published nodes: %v", got)
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("group %q omitted published nodes: got %v, want %v", name, got, want)
 				}
 			}
+			assertRoutingGraph(t, out, "🤖 ChatGPT")
 		}
 		if strings.Contains(string(b), c.Token) || strings.Contains(string(b), c.Reality.PrivateKey) || strings.Contains(string(b), "skip-cert-verify: true") {
 			t.Fatal("subscription leaked secrets or disabled TLS validation")

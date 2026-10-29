@@ -29,14 +29,19 @@ func TestDisplayNamesUpdateAllGroupReferences(t *testing.T) {
 		if provider {
 			continue
 		}
-		for _, v := range doc["proxy-groups"].([]any) {
-			g := v.(map[string]any)
-			for _, ref := range g["proxies"].([]any) {
-				s := ref.(string)
-				if s != "自动选择" && s != "故障切换" && !names[s] {
-					t.Fatal("stale group reference", s)
+		groups := routingGroups(t, doc)
+		for _, name := range []string{"节点选择", "自动选择", "故障切换"} {
+			refs := routingChoices(t, groups, name)
+			for node := range names {
+				found := false
+				for _, ref := range refs {
+					found = found || ref == node
+				}
+				if !found {
+					t.Fatalf("group %q omitted displayed node %q", name, node)
 				}
 			}
 		}
+		assertRoutingGraph(t, doc, "🤖 ChatGPT")
 	}
 }
