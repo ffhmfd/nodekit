@@ -189,6 +189,7 @@ func testFiveProtocols(t *testing.T, cloudflare bool) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	c.Reality.Target = localRealityTarget(t)
 	for i := range c.Protocols {
 		c.Protocols[i].Port = freePort(t)
 	}

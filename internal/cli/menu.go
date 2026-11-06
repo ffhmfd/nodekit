@@ -8,7 +8,6 @@ import (
 	"nodekit/internal/terminal"
 	"os"
 	"os/signal"
-	"strings"
 )
 
 func interrupted(ctx context.Context, signals <-chan os.Signal, fn func(context.Context) error) error {
@@ -100,14 +99,7 @@ func menuAction(ctx context.Context, p paths, s *terminal.Session, choice string
 		}
 		args = []string{"config", "set", key, v}
 	case "8":
-		v, e := read("输入 enable|disable|port|rotate|name 协议 [值]，0返回: ")
-		if e != nil {
-			return e
-		}
-		if v == "0" {
-			return nil
-		}
-		args = append([]string{"protocol"}, strings.Fields(v)...)
+		return protocolMenu(ctx, p, s, out, defaultIPv6Deps())
 	case "9":
 		args = []string{"cert", "renew"}
 	case "10":

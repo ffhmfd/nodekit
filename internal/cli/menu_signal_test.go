@@ -6,6 +6,7 @@ import (
 	"golang.org/x/sys/unix"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -29,6 +30,8 @@ func TestCompletedOperationIsNotReportedAsCanceled(t *testing.T) {
 }
 
 func TestMenuCtrlCReturnsThenAcceptsNewInput(t *testing.T) {
+	p, db, _ := ipv6CLIFixture(t)
+	before := protocolRecord(t, db)
 	fd, err := unix.Open("/dev/ptmx", unix.O_RDWR|unix.O_NOCTTY, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +52,7 @@ func TestMenuCtrlCReturnsThenAcceptsNewInput(t *testing.T) {
 	defer slave.Close()
 	self, _ := os.Executable()
 	cmd := exec.Command(self, "-test.run=^TestInteractiveMenuProcess$")
-	cmd.Env = append(os.Environ(), "NODEKIT_MENU_CHILD=1", "NODEKIT_MENU_ROOT="+t.TempDir())
+	cmd.Env = append(os.Environ(), "NODEKIT_MENU_CHILD=1", "NODEKIT_MENU_ROOT="+p.Root)
 	cmd.Stdin = slave
 	cmd.Stdout = slave
 	cmd.Stderr = slave
@@ -90,6 +93,21 @@ func TestMenuCtrlCReturnsThenAcceptsNewInput(t *testing.T) {
 		t.Fatalf("missing %q in %q", want, text)
 	}
 	wait("请输入编号")
+	for _, portInput := range []bool{false, true} {
+		master.Write([]byte("8\n"))
+		wait("选择协议")
+		if portInput {
+			master.Write([]byte("1\n"))
+			wait("选择操作")
+			master.Write([]byte("3\n"))
+			wait("新端口")
+		}
+		master.Write([]byte("123\x03"))
+		wait("请输入编号")
+		if !reflect.DeepEqual(protocolRecord(t, db), before) {
+			t.Fatal("protocol menu cancellation changed configuration")
+		}
+	}
 	for i := 0; i < 2; i++ {
 		master.Write([]byte("5\n"))
 		wait("输入值")

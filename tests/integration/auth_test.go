@@ -24,6 +24,7 @@ func TestRejectWrongCredentials(t *testing.T) {
 	}
 	dir := t.TempDir()
 	c, _ := model.New()
+	c.Reality.Target = localRealityTarget(t)
 	wrong, _ := model.New()
 	for i := range c.Protocols {
 		c.Protocols[i].Port = freePort(t)

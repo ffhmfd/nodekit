@@ -27,7 +27,7 @@ Linux VPS 节点管理工具：Bash 安装入口、Go 中文向导和独立 miho
 
 ```bash
 bash scripts/build.sh test ./...
-bash scripts/package.sh v0.4.1
+bash scripts/package.sh v0.4.2
 ```
 
 构建缓存和发布包默认存于源码目录的上一级，分别为 `cache/`、`modules/`、`tmp/`、`dist/`。可以设置 `NODEKIT_BUILD_ROOT`。本项目开发优先在 VPS 的专用临时目录进行构建。
@@ -41,9 +41,9 @@ bash scripts/package.sh v0.4.1
 repo=ffhmfd/nodekit
 curl -fLsS --proto '=https' --proto-redir '=https' "https://github.com/$repo/releases/latest/download/install.sh" -o install.sh
 sudo bash install.sh --repo "$repo"
-# 可用 --version v0.4.1 固定版本。
+# 可用 --version v0.4.2 固定版本。
 # 离线安装仍支持：
-sudo bash install.sh --file nodekit-v0.4.1-linux-amd64.tar.gz --sha256 <可信的SHA256>
+sudo bash install.sh --file nodekit-v0.4.2-linux-amd64.tar.gz --sha256 <可信的SHA256>
 sudo nodekit setup
 ```
 
@@ -112,6 +112,10 @@ sudo nodekit subscription
 公开 DNS 查询返回 Cloudflare 边缘地址后，不再直接返回 VPS IP；这不会删除历史 DNS 记录，也不隐藏订阅中的节点 IP。上线验收应检查公开 DNS、边缘与源站两段 TLS、两种订阅 YAML、userinfo 用量更新和 FlClash 实际连接。
 
 ## 日常使用
+
+运行 `sudo nodekit`，进入 **8 协议管理 → 协议编号 → 操作编号**：1启用、2停用、3修改端口、4更换凭据、5修改名称、6恢复自动名称。列表显示当前启用状态和端口，成功后重新读取配置；修改后请在客户端刷新订阅，尤其是更换凭据后。名称支持中文和内部空格。输入错误可重试，`0` 返回上级，配置输入中 `Ctrl+C` 返回主菜单，EOF 正常退出。
+
+菜单8仅管理原入口的启停；附加 IPv6 的协议选择和启停仍在 **24 IPv6节点管理**。同协议共用端口、凭据及名称，修改这些参数也会影响 IPv6 入口；停用原入口不会停用附加 IPv6。协议调整保留订阅 Token 和用量，下列非交互命令仍可使用。
 
 ```bash
 sudo nodekit                            # 中文菜单

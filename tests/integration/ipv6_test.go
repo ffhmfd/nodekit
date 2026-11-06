@@ -42,6 +42,7 @@ func ipv6CoreFixture(t *testing.T) (string, string, model.Config) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.Reality.Target = localRealityTarget(t)
 	c.IPv6Nodes = &model.IPv6NodesConfig{Enabled: true, Address: "2001:4860:4860::8888", Protocols: []string{"vless", "ss", "tuic", "hysteria2", "anytls"}, IPv4ListenAddresses: []string{"127.0.0.1"}}
 	used := map[int]bool{}
 	for i := range c.Protocols {
