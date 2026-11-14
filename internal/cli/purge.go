@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"net/netip"
 	"nodekit/internal/cloudflare"
 	"nodekit/internal/model"
 	"os"
@@ -163,12 +162,7 @@ func discoverLegacyDNS(ctx context.Context, api cloudflare.API, zone string, c m
 		return nil, errors.New("legacy DNS is not uniquely identifiable; register it with nodekit dns adopt before purge")
 	}
 	r := rows[0]
-	address, err := netip.ParseAddr(c.Address)
-	if err != nil {
-		return nil, err
-	}
-	actual, err := netip.ParseAddr(r.Content)
-	if err != nil || actual.Unmap() != address.Unmap() || r.Name != c.Domain || (r.Type != "A" && r.Type != "AAAA") || r.Proxied != (c.EffectiveSubscriptionMode() == "cloudflare") {
+	if !matchesDNSOrigin(r, c) {
 		return nil, cloudflare.ErrConflict
 	}
 	return []cloudflare.ManagedRecord{{ZoneID: zone, Record: r, Previous: &r, Created: false}}, nil

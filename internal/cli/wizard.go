@@ -109,23 +109,32 @@ func collectSetup(ctx context.Context, s *terminal.Session, deps wizardDeps) (se
 		return input, terminal.ErrCanceled
 	}
 	if lookupErr != nil {
-		s.Printf("自动检测不可用，请手工填写公网IP。\n")
+		s.Printf("自动检测不可用，请手工填写公网IP或DDNS域名。\n")
 	}
-	c.Address, err = ask("VPS公网IP", address)
+	c.Address, err = ask("客户端服务器地址（公网IP或DDNS域名）", address)
 	if err != nil {
 		return input, err
 	}
-	parsed, err := netip.ParseAddr(c.Address)
-	if err != nil {
-		return input, errors.New("invalid public IP")
+	if model.IsDomainAddress(c.Address) {
+		c.Address = model.NormalizeAddress(c.Address)
+		s.Printf("DDNS域名须直接解析到VPS（不开橙云）；订阅使用另一个域名，以CNAME跟随DDNS。默认使用IPv4解析。\n")
+	} else {
+		parsed, err := netip.ParseAddr(c.Address)
+		if err != nil {
+			return input, errors.New("请输入公网IP或DDNS域名，不带协议、路径或端口")
+		}
+		c.Address = parsed.Unmap().String()
+		c.IPv6 = parsed.Unmap().Is6()
 	}
-	c.Address = parsed.Unmap().String()
-	c.IPv6 = parsed.Unmap().Is6()
 	if err = (model.Config{SubscriptionMode: "cloudflare", SubscriptionPort: 8443, Address: c.Address, IPv6: c.IPv6}).ValidateSubscription(); err != nil {
 		return input, err
 	}
-	if err = c.SetSubscriptionMode(mode); err != nil {
-		return input, err
+	if mode != "direct" && mode != "cloudflare" {
+		return input, errors.New("subscription mode must be direct or cloudflare")
+	}
+	c.SubscriptionMode = mode
+	if mode == "cloudflare" {
+		c.SubscriptionPort = 8443
 	}
 	input.Token, err = s.ReadLine(ctx, "Cloudflare Token（直接粘贴，不回显）: ", true)
 	if err != nil {
@@ -173,6 +182,9 @@ func collectSetup(ctx context.Context, s *terminal.Session, deps wizardDeps) (se
 	if !model.ValidDomain(c.Domain) || c.Domain == zone.Name {
 		return input, errors.New("invalid dedicated subdomain")
 	}
+	if err = c.ValidateSubscription(); err != nil {
+		return input, err
+	}
 	records, err := deps.Records(ctx, input.Token, zone.ID, c.Domain)
 	if err != nil {
 		return input, err
@@ -182,8 +194,8 @@ func collectSetup(ctx context.Context, s *terminal.Session, deps wizardDeps) (se
 	}
 	if len(records) == 1 {
 		r := records[0]
-		if r.Type != "A" && r.Type != "AAAA" {
-			return input, errors.New("existing CNAME or other DNS type; select another dedicated name")
+		if r.Type != "A" && r.Type != "AAAA" && r.Type != "CNAME" {
+			return input, errors.New("existing unsupported DNS type; select another dedicated name")
 		}
 		s.Printf("现有记录 %s %s → %s，代理=%t。接管后彻底卸载会删除此记录。\n", r.Type, r.Name, r.Content, r.Proxied)
 		answer, e := ask("输入 adopt 接管/更新，其他输入返回", "")

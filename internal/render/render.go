@@ -57,7 +57,7 @@ func Subscription(c model.Config, provider bool) ([]byte, error) {
 	appendNode := func(n model.Protocol, name, address, family string) {
 		names = append(names, name)
 		v := obj{"name": name, "type": n.Type, "server": address, "port": n.Port, "udp": true}
-		if c.IPv6Nodes != nil && family == "ipv4" {
+		if family == "ipv4" && (c.IPv6Nodes != nil || (model.IsDomainAddress(c.Address) && !c.IPv6)) {
 			// A direct-mode domain may have AAAA records. Enabling client IPv6
 			// must not silently turn an original IPv4 node into an IPv6 dial.
 			v["ip-version"] = "ipv4"
@@ -103,7 +103,12 @@ func Subscription(c model.Config, provider bool) ([]byte, error) {
 		for key, value := range clientRouting(c, names) {
 			result[key] = value
 		}
-		result["dns"] = clientDNS(c.IPv6 || c.HasIPv6Nodes())
+		dns := clientDNS(c.IPv6 || c.HasIPv6Nodes())
+		if model.IsDomainAddress(c.Address) {
+			// Resolve the proxy itself without depending on that proxy being up.
+			dns["proxy-server-nameserver"] = []string{"tls://223.5.5.5:853", "tls://1.12.12.12:853"}
+		}
+		result["dns"] = dns
 		result["sniffer"] = clientSniffer()
 	}
 	return yaml.Marshal(result)

@@ -44,6 +44,15 @@ func TestClientPaginationAndRedactedErrors(t *testing.T) {
 }
 
 func TestCreateRecoveryAndExactDeletion(t *testing.T) {
+	testCreateRecoveryAndExactDeletion(t, "A", "8.8.8.8")
+}
+
+func TestDDNSCreateRecoveryAndExactDeletion(t *testing.T) {
+	testCreateRecoveryAndExactDeletion(t, "CNAME", "ddns.example.com")
+}
+
+func testCreateRecoveryAndExactDeletion(t *testing.T, kind, content string) {
+	t.Helper()
 	var stored *Record
 	creates, deletes := 0, 0
 	intentSaved := false
@@ -89,7 +98,7 @@ func TestCreateRecoveryAndExactDeletion(t *testing.T) {
 	}))
 	defer server.Close()
 	client := &Client{BaseURL: server.URL, Token: "secret", HTTP: server.Client()}
-	op := Operation{InstallationID: "installation-one", ZoneID: "z", Desired: Record{Type: "A", Name: "node.example.com", Content: "8.8.8.8", TTL: 1, Proxied: true}}
+	op := Operation{InstallationID: "installation-one", ZoneID: "z", Desired: Record{Type: kind, Name: "node.example.com", Content: content, TTL: 1, Proxied: true}}
 	save := func() error { intentSaved = true; return nil }
 	owned, err := Ensure(context.Background(), client, &op, save)
 	if err != nil || creates != 1 || owned.Record.ID != "r" {
@@ -102,7 +111,7 @@ func TestCreateRecoveryAndExactDeletion(t *testing.T) {
 	if err = DeleteManaged(context.Background(), client, owned); !errors.Is(err, ErrConflict) || deletes != 0 {
 		t.Fatal("deleted externally changed record", err)
 	}
-	stored.Content = "8.8.8.8"
+	stored.Content = content
 	if err = DeleteManaged(context.Background(), client, owned); err != nil || deletes != 1 {
 		t.Fatal(err)
 	}

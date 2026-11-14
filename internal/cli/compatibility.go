@@ -39,6 +39,9 @@ func checkReleaseCompatibility(ctx context.Context, c model.Config, binary strin
 	if c.IPv6Nodes != nil {
 		required["ipv6-nodes-v1"] = true
 	}
+	if model.IsDomainAddress(c.Address) {
+		required["ddns-cname-v1"] = true
+	}
 	if c.EffectiveSubscriptionMode() == "direct" && len(required) == 0 {
 		return nil
 	}
@@ -60,7 +63,7 @@ func checkReleaseCompatibility(ctx context.Context, c model.Config, binary strin
 			if len(required) == 0 {
 				return nil
 			}
-			return errors.New("目标程序不支持现有DNS/名称/IPv6/卸载状态，拒绝降级")
+			return errors.New("目标程序不支持现有DNS/DDNS/名称/IPv6/卸载状态，拒绝降级")
 		}
 	}
 	return errors.New("目标程序不支持当前订阅模式；如需降级，请先显式切回 direct")
@@ -71,7 +74,32 @@ func hostFeatures(m hostManifest) []string {
 	if len(m.DNSRecords) > 0 || m.DNSOperation != nil || m.InstallationID != "" || m.PurgePhase != "" {
 		out = append(out, "managed-dns-v1", "purge-v1")
 	}
+	if hostHasCNAME(m) {
+		out = append(out, "ddns-cname-v1")
+	}
 	return out
+}
+
+func hostHasCNAME(m hostManifest) bool {
+	for _, record := range m.DNSRecords {
+		if record.Record.Type == "CNAME" || (record.Previous != nil && record.Previous.Type == "CNAME") {
+			return true
+		}
+	}
+	if pending := m.DNSOperation; pending != nil {
+		op := pending.Operation
+		if model.IsDomainAddress(pending.Old.Address) || model.IsDomainAddress(pending.Next.Address) ||
+			op.Desired.Type == "CNAME" || (op.Previous != nil && op.Previous.Type == "CNAME") ||
+			(op.Current != nil && op.Current.Type == "CNAME") {
+			return true
+		}
+		for _, record := range pending.PreviousRecords {
+			if record.Record.Type == "CNAME" || (record.Previous != nil && record.Previous.Type == "CNAME") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func serviceBinary(ctx context.Context, p paths, c model.Config) (string, error) {
@@ -110,6 +138,9 @@ func saveRetainedRequirements(p paths, m *hostManifest, c model.Config) error {
 	}
 	if c.IPv6Nodes != nil {
 		features["ipv6-nodes-v1"] = true
+	}
+	if model.IsDomainAddress(c.Address) {
+		features["ddns-cname-v1"] = true
 	}
 	m.RequiredFeatures = nil
 	for f := range features {

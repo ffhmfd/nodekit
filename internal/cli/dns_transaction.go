@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/netip"
 	"nodekit/internal/cloudflare"
 	"nodekit/internal/model"
 	"time"
@@ -48,14 +47,9 @@ func prepareDNSChange(ctx context.Context, api cloudflare.API, m *hostManifest, 
 	if err := next.Validate(); err != nil {
 		return err
 	}
-	ip, err := netip.ParseAddr(next.Address)
+	typ, content, err := next.DNSRecord()
 	if err != nil {
 		return err
-	}
-	ip = ip.Unmap()
-	typ := "A"
-	if ip.Is6() {
-		typ = "AAAA"
 	}
 	if m.InstallationID == "" {
 		m.InstallationID, err = model.RandomToken()
@@ -64,7 +58,7 @@ func prepareDNSChange(ctx context.Context, api cloudflare.API, m *hostManifest, 
 		}
 	}
 	m.DNSOperation = &dnsTransaction{Old: old.Clone(), Next: next.Clone(), PreviousRecords: append([]cloudflare.ManagedRecord(nil), m.DNSRecords...), Phase: "prepared", Operation: cloudflare.Operation{
-		InstallationID: m.InstallationID, ZoneID: zone, Previous: previous, Desired: cloudflare.Record{Type: typ, Name: next.Domain, Content: ip.String(), TTL: 1, Proxied: next.EffectiveSubscriptionMode() == "cloudflare"},
+		InstallationID: m.InstallationID, ZoneID: zone, Previous: previous, Desired: cloudflare.Record{Type: typ, Name: next.Domain, Content: content, TTL: 1, Proxied: next.EffectiveSubscriptionMode() == "cloudflare"},
 	}}
 	if err = save(); err != nil {
 		return err

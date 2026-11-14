@@ -110,7 +110,7 @@ func editDNS(ctx context.Context, p paths, old, next model.Config, adopt bool) (
 		}
 		if len(rows) == 1 {
 			r := rows[0]
-			if r.Content != next.Address || r.Proxied != (next.EffectiveSubscriptionMode() == "cloudflare") || (r.Type != "A" && r.Type != "AAAA") {
+			if !matchesDNSOrigin(r, next) {
 				return false, errors.New("existing DNS does not match configured origin/mode; use setup to explicitly change it")
 			}
 			previous = &r
@@ -143,6 +143,13 @@ func recoverDNS(ctx context.Context, p paths, m *hostManifest, client cloudflare
 	}
 	_, err := resolveDNSChange(ctx, client, m, save, func(ctx context.Context) (model.Config, error) { return rootConfig(ctx, p) })
 	return err
+}
+
+func matchesDNSOrigin(r cloudflare.Record, c model.Config) bool {
+	kind, content, err := c.DNSRecord()
+	return err == nil && r.Type == kind && model.NormalizeAddress(r.Content) == content &&
+		strings.EqualFold(strings.TrimSuffix(r.Name, "."), strings.TrimSuffix(c.Domain, ".")) &&
+		r.Proxied == (c.EffectiveSubscriptionMode() == "cloudflare")
 }
 
 func dnsCommand(ctx context.Context, p paths, args []string, out io.Writer) error {

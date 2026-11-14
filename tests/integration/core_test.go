@@ -179,7 +179,11 @@ func TestCloudflareFiveProtocols(t *testing.T) {
 	testFiveProtocols(t, true)
 }
 
-func testFiveProtocols(t *testing.T, cloudflare bool) {
+func TestDDNSFiveProtocols(t *testing.T) {
+	testFiveProtocols(t, true, "ddns.fixture.test")
+}
+
+func testFiveProtocols(t *testing.T, cloudflare bool, ddns ...string) {
 	bin := os.Getenv("NODEKIT_CORE_BIN")
 	if bin == "" {
 		t.Skip("set NODEKIT_CORE_BIN to run isolated real-kernel tests")
@@ -198,6 +202,9 @@ func testFiveProtocols(t *testing.T, cloudflare bool) {
 		c.SubscriptionMode = "cloudflare"
 		c.SubscriptionPort = 8443
 		c.Address = "8.8.8.8"
+	}
+	if len(ddns) > 0 {
+		c.Address = ddns[0]
 	}
 	serverDir := filepath.Join(dir, "server")
 	if e = os.MkdirAll(serverDir, 0700); e != nil {
@@ -241,11 +248,13 @@ func testFiveProtocols(t *testing.T, cloudflare bool) {
 	}
 	for i, raw := range subs["proxies"].([]any) {
 		n := raw.(map[string]any)
-		if cloudflare && n["server"] != "8.8.8.8" {
-			t.Fatal("cloudflare renderer did not emit the configured IP")
+		if cloudflare && n["server"] != c.Address {
+			t.Fatal("cloudflare renderer did not emit the configured address")
 		}
 		t.Run(c.Protocols[i].Type, func(t *testing.T) {
-			n["server"] = "127.0.0.1"
+			if len(ddns) == 0 {
+				n["server"] = "127.0.0.1"
+			}
 			if c.Protocols[i].Type != "vless" && c.Protocols[i].Type != "ss" {
 				block, _ := pem.Decode(cert)
 				sum := sha256.Sum256(block.Bytes)
@@ -253,6 +262,11 @@ func testFiveProtocols(t *testing.T, cloudflare bool) {
 			}
 			port := freePort(t)
 			client := map[string]any{"mixed-port": port, "bind-address": "127.0.0.1", "log-level": "warning", "proxies": []any{n}, "rules": []string{"MATCH," + n["name"].(string)}}
+			if len(ddns) > 0 {
+				// Keep the emitted hostname and TLS identity intact. Resolve it
+				// locally so this protocol test never contacts a production node.
+				client["hosts"] = map[string]any{"ddns.fixture.test": "127.0.0.1"}
+			}
 			cb, e := yaml.Marshal(client)
 			if e != nil {
 				t.Fatal(e)

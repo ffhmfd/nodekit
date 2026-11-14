@@ -7,7 +7,8 @@ Linux VPS 节点管理工具：Bash 安装入口、Go 中文向导和独立 miho
 - VLESS REALITY Vision、SS2022、TUIC V5、Hysteria2、AnyTLS。
 - 中文菜单和非交互命令；节点配置与订阅由同一份配置生成。
 - HTTPS 完整配置订阅和纯节点 provider，面向 FlClash 等 mihomo 客户端。
-- 可选 Cloudflare 橙云 HTTPS 订阅，五协议节点使用公网 IP 直连并保持 TLS 身份校验。
+- 可选 Cloudflare 橙云 HTTPS 订阅，五协议节点使用公网 IP 或 DDNS 域名直连并保持 TLS 身份校验。
+- 动态 IP：节点保留 DDNS 域名，托管订阅域名以 CNAME 跟随 DDNS，无需定时重写订阅。
 - 每台 VPS 独立统计本项目节点上传/下载，订阅展示总额度及到期日期。
 - 北京时间每月指定日、小时清零，也可以手动清零。
 - Cloudflare DNS-01 申请/续期证书；独立端口和 systemd 单元。
@@ -27,7 +28,7 @@ Linux VPS 节点管理工具：Bash 安装入口、Go 中文向导和独立 miho
 
 ```bash
 bash scripts/build.sh test ./...
-bash scripts/package.sh v0.4.2
+bash scripts/package.sh v0.5.0
 ```
 
 构建缓存和发布包默认存于源码目录的上一级，分别为 `cache/`、`modules/`、`tmp/`、`dist/`。可以设置 `NODEKIT_BUILD_ROOT`。本项目开发优先在 VPS 的专用临时目录进行构建。
@@ -41,15 +42,15 @@ bash scripts/package.sh v0.4.2
 repo=ffhmfd/nodekit
 curl -fLsS --proto '=https' --proto-redir '=https' "https://github.com/$repo/releases/latest/download/install.sh" -o install.sh
 sudo bash install.sh --repo "$repo"
-# 可用 --version v0.4.2 固定版本。
+# 可用 --version v0.5.0 固定版本。
 # 离线安装仍支持：
-sudo bash install.sh --file nodekit-v0.4.2-linux-amd64.tar.gz --sha256 <可信的SHA256>
+sudo bash install.sh --file nodekit-v0.5.0-linux-amd64.tar.gz --sha256 <可信的SHA256>
 sudo nodekit setup
 ```
 
 安装器自动识别 AMD64/ARM64，从同一固定 Release 取得包和 SHA256SUMS。校验用于下载完整性，信任来源是所选仓库和 HTTPS，并非独立数字签名。交互安装后进入向导，已有安装进入管理菜单；非终端运行时显式添加 `--non-interactive`，仅部署程序，随后执行 `nodekit setup` 或带完整参数的 `nodekit init`。初始化前准备：
 
-1. 一个 Cloudflare 区域内的专用子域名。向导创建或显式接管 A/AAAA；`direct` 使用灰云，默认 `cloudflare` 使用橙云。
+1. 一个 Cloudflare 区域内的专用子域名。向导创建或显式接管 A/AAAA/CNAME；填数字 IP 时使用 A/AAAA，填 DDNS 域名时使用 CNAME。`direct` 使用灰云，默认 `cloudflare` 使用橙云。
 2. 该区域的 **Zone Read、DNS Edit** API Token。向导直接输入或粘贴 Token，输入时不回显，无需准备文件路径；确认提交后自动保存标准副本 `/root/nodekit-cloudflare.token`（root/600）和续期副本 `/etc/nodekit/cloudflare.token`（root/服务组640）。普通卸载保留，彻底卸载删除这两个文件，不撤销 Cloudflare API Token。非交互初始化仍使用 `--token-file` 读取受限文件。
 3. ACME 注册邮箱、节点使用端口、流量额度和日期。节点 TLS 直连仍需要公网受信任证书，不能用 Cloudflare Origin Certificate 替代。
 
@@ -97,7 +98,7 @@ sudo nodekit init --subscription-mode cloudflare \
 
 新建橙云配置默认 8443，也可通过 `--subscription-port` 选择 2053、2083、2087、2096、8443。IPv6 地址需要 `--ipv6`，或在导入配置中设置 `ipv6: true`。使用 `--config` 时保留文件中的显式端口；不兼容时应编辑文件或传入合法端口。
 
-订阅形如 `https://node.example.com:8443/s/<token>/config.yaml`。只有 HTTPS 订阅经过 Cloudflare；全部节点 `server` 为 VPS IP，TUIC/HY2/AnyTLS 的 SNI 为证书域名，REALITY 使用自己的 SNI。节点不依赖域名解析，TLS 校验保持启用。DNS-01 签证书不要求公开 DNS 指向源站。
+订阅形如 `https://node.example.com:8443/s/<token>/config.yaml`。只有 HTTPS 订阅经过 Cloudflare；填写数字 IP 时，全部节点 `server` 为 VPS IP，TUIC/HY2/AnyTLS 的 SNI 为证书域名，REALITY 使用自己的 SNI。IP 节点不依赖域名解析，TLS 校验保持启用。DNS-01 签证书不要求公开 DNS 指向源站。动态 IP 的 DDNS 配置见下一节。
 
 **已有配置迁移：先升级至 v0.1.1，再设置真实公网 IP 和模式，最后开启橙云并刷新客户端订阅。**
 
@@ -110,6 +111,40 @@ sudo nodekit subscription
 模式切换会保留兼容端口，否则选择 8443；端口冲突则拒绝并保持原配置。也可先设置其他兼容订阅端口。缺少 `subscription_mode` 的旧 JSON 始终按 `direct` 处理，旧节点地址/端口不会自动迁移。
 
 公开 DNS 查询返回 Cloudflare 边缘地址后，不再直接返回 VPS IP；这不会删除历史 DNS 记录，也不隐藏订阅中的节点 IP。上线验收应检查公开 DNS、边缘与源站两段 TLS、两种订阅 YAML、userinfo 用量更新和 FlClash 实际连接。
+
+### 动态 IP：DDNS 节点与 CNAME 订阅
+
+安装支持本节功能的版本后，向导的“客户端服务器地址”、菜单 **17 修改节点地址**、`--address` 和 `config set address` 都可填写 `ddns.example.com`。
+
+- **DDNS 域名**由现有 DDNS 服务更新，直接解析到 VPS，不能开启橙云。只填域名，不带 `https://`、路径或端口；国际域名使用 punycode。
+- **订阅/证书域名**使用另一个专用子域名，例如 `node.example.com`。开启托管 DNS 后，NodeKit 将它设为指向 DDNS 域名的 CNAME：`cloudflare` 开橙云，`direct` 为灰云。两个名称不能相同，也不要手动建立相互引用的 CNAME。
+- 完整订阅和纯节点 provider 的五种协议均保留 DDNS 域名作为 `server`，不会把一次解析结果保存为固定 IP。TUIC/HY2/AnyTLS 仍使用订阅域名作为 SNI 并验证证书，REALITY 使用原 SNI。
+- 默认 DDNS 节点使用 IPv4 解析，因此 DDNS 必须有可达的 A 记录；双栈/IPv6-only 地址可通过已有 `--ipv6`（配置 `ipv6: true`）启用 IPv6 监听和解析。附加 IPv6 节点仍使用单独配置的明确 IPv6 地址。
+
+新安装示例（替换订阅域名、邮箱和 Token 路径）：
+
+```bash
+sudo nodekit init --managed-dns --subscription-mode cloudflare \
+  --domain node.example.com --address ddns.example.com \
+  --email admin@example.com --token-file /root/nodekit-cloudflare.token \
+  --firewall auto
+```
+
+已有安装先升级管理器，然后：
+
+```bash
+sudo nodekit capabilities   # features 中应有 ddns-cname-v1
+sudo nodekit dns status
+# 已托管 DNS 的安装：同时把订阅 A/AAAA 改为 CNAME
+sudo nodekit config set address ddns.example.com
+sudo nodekit subscription
+```
+
+未托管 DNS 的旧安装，可在修改地址前用 `sudo nodekit dns adopt` 接管当前匹配的订阅记录；或自行把订阅域名改成指向 DDNS 域名的 CNAME。接管的是订阅记录，DDNS 目标记录仍由你的 DDNS 服务管理。首次迁移后刷新客户端订阅；订阅 URL、Token 和节点凭据保持不变。
+
+后续公网 IP 变化时无需重新生成节点或修改订阅链接；生效速度受 DDNS 更新、客户端和 Cloudflare 的 DNS 缓存影响，已有连接可能需要重连，不保证瞬时切换。完整配置为 DDNS 节点提供独立的 `proxy-server-nameserver`；纯节点 provider 使用者需自行保证客户端能直接解析节点域名。
+
+若启用了菜单24的明确网卡地址监听，网卡本身的地址发生变化后仍需重新配置该功能；DDNS 只更新远端连接目的地址。DNS 迁移失败可使用既有 `nodekit dns recover`；持有 DDNS/CNAME 配置或恢复记录时，会阻止回滚到不支持 `ddns-cname-v1` 的旧程序。
 
 ## 日常使用
 

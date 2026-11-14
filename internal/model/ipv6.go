@@ -80,7 +80,7 @@ func (c Config) validateIPv6Nodes() error {
 		return nil
 	}
 	ipv4, err := netip.ParseAddr(c.Address)
-	if err != nil || !ipv4.Is4() || c.IPv6 {
+	if c.IPv6 || (!IsDomainAddress(c.Address) && (err != nil || !ipv4.Is4())) {
 		return errors.New("IPv6 nodes require an IPv4 installation with legacy IPv6 disabled")
 	}
 	nodes := c.IPv6Nodes

@@ -29,7 +29,7 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 	subscriptionMode := fs.String("subscription-mode", "", "direct or cloudflare")
 	subscriptionPort := fs.Int("subscription-port", 0, "HTTPS subscription port")
 	ipv6 := fs.Bool("ipv6", false, "enable IPv6")
-	address := fs.String("address", "", "public IP address")
+	address := fs.String("address", "", "public IP or direct DDNS hostname")
 	managedDNS := fs.Bool("managed-dns", false, "manage this node's Cloudflare DNS record")
 	dnsZoneID := fs.String("dns-zone", "", "Cloudflare zone ID (otherwise discover by domain)")
 	adoptDNS := fs.Bool("adopt-dns", false, "explicitly adopt the existing dedicated DNS record")
@@ -114,7 +114,7 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 		if e != nil {
 			return e
 		}
-		c.Address, e = prompt("VPS 公网 IP: ")
+		c.Address, e = prompt("客户端服务器地址（公网 IP 或 DDNS 域名）: ")
 		if e != nil {
 			return e
 		}
@@ -156,6 +156,7 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 	if *address != "" {
 		c.Address = *address
 	}
+	c.Address = model.NormalizeAddress(c.Address)
 	if explicit["ipv6"] {
 		c.IPv6 = *ipv6
 	}
@@ -330,7 +331,7 @@ func initialize(ctx context.Context, p paths, args []string, in io.Reader, out i
 			}
 			if len(rows) == 1 {
 				r := rows[0]
-				if r.Type != "A" && r.Type != "AAAA" {
+				if r.Type != "A" && r.Type != "AAAA" && r.Type != "CNAME" {
 					return cloudflare.ErrConflict
 				}
 				previous = &r

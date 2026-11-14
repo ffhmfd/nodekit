@@ -47,7 +47,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		return 0
 	}
 	if args[0] == "capabilities" {
-		if e := json.NewEncoder(out).Encode(capabilities{SubscriptionModes: []string{"direct", "cloudflare"}, Features: []string{"node-names-v1", "managed-dns-v1", "purge-v1", "interactive-cancel-v1", "ipv6-nodes-v1"}}); e != nil {
+		if e := json.NewEncoder(out).Encode(capabilities{SubscriptionModes: []string{"direct", "cloudflare"}, Features: []string{"node-names-v1", "managed-dns-v1", "purge-v1", "interactive-cancel-v1", "ipv6-nodes-v1", "ddns-cname-v1"}}); e != nil {
 			fmt.Fprintln(errOut, e)
 			return 1
 		}
@@ -314,7 +314,7 @@ func editWithIPv6Deps(ctx context.Context, p paths, args []string, out io.Writer
 					return e
 				}
 			case "address":
-				c.Address = args[3]
+				c.Address = model.NormalizeAddress(args[3])
 			case "subscription-mode":
 				if e := c.SetSubscriptionMode(args[3]); e != nil {
 					return e

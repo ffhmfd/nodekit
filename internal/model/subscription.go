@@ -17,6 +17,9 @@ func (c Config) EffectiveSubscriptionMode() string {
 }
 
 func (c Config) NodeAddress() string {
+	if IsDomainAddress(c.Address) {
+		return NormalizeAddress(c.Address)
+	}
 	if c.EffectiveSubscriptionMode() == "cloudflare" {
 		if ip, err := netip.ParseAddr(c.Address); err == nil {
 			return ip.Unmap().String()
@@ -53,6 +56,11 @@ var nonPublicPrefixes = []netip.Prefix{
 
 // ValidateSubscription also serves issuance checks before credentials exist.
 func (c Config) ValidateSubscription() error {
+	if IsDomainAddress(c.Address) {
+		if _, _, err := c.DNSRecord(); err != nil {
+			return err
+		}
+	}
 	switch c.EffectiveSubscriptionMode() {
 	case "direct":
 		return nil
@@ -62,6 +70,9 @@ func (c Config) ValidateSubscription() error {
 	}
 	if !CloudflareHTTPSPort(c.SubscriptionPort) {
 		return errors.New("cloudflare HTTPS port must be 2053, 2083, 2087, 2096 or 8443")
+	}
+	if IsDomainAddress(c.Address) {
+		return nil
 	}
 	ip, err := netip.ParseAddr(c.Address)
 	if err != nil || ip.Zone() != "" {

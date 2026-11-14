@@ -11,25 +11,35 @@ func validateDomainAddress(ctx context.Context, mode, domain, address string, lo
 	if !model.ValidDomain(domain) {
 		return errors.New("invalid certificate domain")
 	}
-	c := model.Config{SubscriptionMode: mode, Address: address, IPv6: true, SubscriptionPort: 8443}
+	c := model.Config{SubscriptionMode: mode, Domain: domain, Address: address, IPv6: true, SubscriptionPort: 8443}
 	if err := c.ValidateSubscription(); err != nil {
 		return err
 	}
 	if c.EffectiveSubscriptionMode() == "cloudflare" {
 		return nil
 	}
-	configured := net.ParseIP(address)
-	if configured == nil {
-		return errors.New("address must be an IP")
+	var configured []net.IPAddr
+	if model.IsDomainAddress(address) {
+		var err error
+		configured, err = lookup(ctx, model.NormalizeAddress(address))
+		if err != nil {
+			return err
+		}
+	} else if ip := net.ParseIP(address); ip != nil {
+		configured = []net.IPAddr{{IP: ip}}
+	} else {
+		return errors.New("address must be an IP or a DDNS domain")
 	}
 	ips, err := lookup(ctx, domain)
 	if err != nil {
 		return err
 	}
 	for _, ip := range ips {
-		if ip.IP.Equal(configured) {
-			return nil
+		for _, origin := range configured {
+			if ip.IP.Equal(origin.IP) {
+				return nil
+			}
 		}
 	}
-	return errors.New("域名 A/AAAA 与配置 address 不匹配；请检查灰云解析")
+	return errors.New("订阅域名与配置 address 的当前解析不匹配；请检查灰云 A/AAAA/CNAME")
 }

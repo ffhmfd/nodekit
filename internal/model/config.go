@@ -137,8 +137,8 @@ func (c Config) Validate() error {
 	if !ValidDomain(c.Domain) {
 		return errors.New("invalid domain")
 	}
-	if c.Address != "" && net.ParseIP(c.Address) == nil {
-		return errors.New("address must be an IP")
+	if c.Address != "" && net.ParseIP(c.Address) == nil && !IsDomainAddress(c.Address) {
+		return errors.New("address must be an IP or a DDNS domain without scheme, path or port")
 	}
 	if e := c.validateIPv6Nodes(); e != nil {
 		return e

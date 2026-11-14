@@ -3,7 +3,6 @@ package cloudflare
 import (
 	"context"
 	"errors"
-	"net/netip"
 	"nodekit/internal/model"
 	"strings"
 )
@@ -35,7 +34,11 @@ type Operation struct {
 
 func Equal(a, b Record) bool { return a.ID == b.ID && sameValues(a, b) }
 func sameValues(a, b Record) bool {
-	return a.Type == b.Type && strings.EqualFold(strings.TrimSuffix(a.Name, "."), strings.TrimSuffix(b.Name, ".")) && a.Content == b.Content && a.Proxied == b.Proxied && a.TTL == b.TTL && a.Comment == b.Comment
+	contentEqual := a.Content == b.Content
+	if a.Type == "CNAME" && b.Type == "CNAME" {
+		contentEqual = strings.EqualFold(strings.TrimSuffix(a.Content, "."), strings.TrimSuffix(b.Content, "."))
+	}
+	return a.Type == b.Type && strings.EqualFold(strings.TrimSuffix(a.Name, "."), strings.TrimSuffix(b.Name, ".")) && contentEqual && a.Proxied == b.Proxied && a.TTL == b.TTL && a.Comment == b.Comment
 }
 func desired(op *Operation) (Record, error) {
 	r := op.Desired
@@ -44,15 +47,14 @@ func desired(op *Operation) (Record, error) {
 	if !idRE.MatchString(op.InstallationID) || len(op.InstallationID) > 64 || !idRE.MatchString(op.ZoneID) || !model.ValidDomain(r.Name) {
 		return r, errors.New("invalid managed DNS intent")
 	}
-	ip, err := netip.ParseAddr(r.Content)
-	if err != nil || ip.Zone() != "" {
-		return r, errors.New("invalid DNS origin IP")
+	kind, content, err := (model.Config{Domain: r.Name, Address: r.Content}).DNSRecord()
+	if err != nil {
+		return r, err
 	}
-	ip = ip.Unmap()
-	r.Content = ip.String()
-	if (ip.Is4() && r.Type != "A") || (ip.Is6() && r.Type != "AAAA") {
+	if r.Type != kind {
 		return r, errors.New("DNS type does not match origin address")
 	}
+	r.Content = content
 	r.Comment = "nodekit:" + op.InstallationID
 	if r.TTL == 0 {
 		r.TTL = 1

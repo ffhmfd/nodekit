@@ -47,7 +47,15 @@ func availableCloudflarePort(t *testing.T, exclude int) int {
 	return 0
 }
 
-func testPortableLifecycle(t *testing.T, cloudflare bool) {
+func TestDDNSPortableLifecycle(t *testing.T) {
+	for _, cloudflare := range []bool{false, true} {
+		t.Run(fmt.Sprint("cloudflare=", cloudflare), func(t *testing.T) {
+			testPortableLifecycle(t, cloudflare, "ddns.fixture.test")
+		})
+	}
+}
+
+func testPortableLifecycle(t *testing.T, cloudflare bool, ddns ...string) {
 	bin := os.Getenv("NODEKIT_CORE_BIN")
 	if bin == "" {
 		t.Skip("set NODEKIT_CORE_BIN")
@@ -67,6 +75,9 @@ func testPortableLifecycle(t *testing.T, cloudflare bool) {
 		cfg.SubscriptionMode = "cloudflare"
 		cfg.Address = "8.8.8.8"
 		cfg.SubscriptionPort = availableCloudflarePort(t, 0)
+	}
+	if len(ddns) > 0 {
+		cfg.Address = ddns[0]
 	}
 	cp, kp, trust := testCert(t, root)
 	input := filepath.Join(root, "input.json")
@@ -124,6 +135,9 @@ func testPortableLifecycle(t *testing.T, cloudflare bool) {
 	if res.StatusCode != 200 || !strings.Contains(string(body), "proxy-groups:") {
 		t.Fatal("invalid HTTPS subscription", res.StatusCode)
 	}
+	if len(ddns) > 0 && strings.Count(string(body), "server: ddns.fixture.test") != 5 {
+		t.Fatal("HTTPS subscription lost DDNS endpoints")
+	}
 	if cloudflare {
 		origin, _ := urlpkg.Parse(url)
 		origin.Path = ""
@@ -144,7 +158,7 @@ func testPortableLifecycle(t *testing.T, cloudflare bool) {
 				}
 				continue
 			}
-			if r.StatusCode != 200 || r.Header.Get("Cache-Control") != "no-store" || r.Header.Get("Subscription-Userinfo") == "" || strings.Count(string(payload), "server: 8.8.8.8") != 5 {
+			if r.StatusCode != 200 || r.Header.Get("Cache-Control") != "no-store" || r.Header.Get("Subscription-Userinfo") == "" || strings.Count(string(payload), "server: "+cfg.Address) != 5 {
 				t.Fatal("simulated edge changed subscription", r.StatusCode, r.Header)
 			}
 		}

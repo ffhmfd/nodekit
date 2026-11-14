@@ -162,7 +162,7 @@ func validateLocalIPv6Nodes(c model.Config, deps ipv6Deps) error {
 
 func configureIPv6Nodes(c *model.Config, address, selection string, deps ipv6Deps) error {
 	primary, primaryErr := netip.ParseAddr(c.Address)
-	if c.IPv6 || primaryErr != nil || !primary.Is4() {
+	if c.IPv6 || (!model.IsDomainAddress(c.Address) && (primaryErr != nil || !primary.Is4())) {
 		return errors.New("此功能用于已完成的IPv4安装；旧IPv6/双栈安装保持原行为，不能直接叠加")
 	}
 	ip, err := netip.ParseAddr(strings.TrimSpace(address))
