@@ -40,7 +40,8 @@ func Subscription(b Backend) http.Handler {
 			http.Error(w, "invalid subscription configuration", 503)
 			return
 		}
-		info := fmt.Sprintf("upload=%d; download=%d", record.Meter.Upload, record.Meter.Download)
+		upload, download := record.Config.TrafficUsage(record.Meter.Upload, record.Meter.Download)
+		info := fmt.Sprintf("upload=%d; download=%d", upload, download)
 		if record.Config.Quota > 0 {
 			info += fmt.Sprintf("; total=%d", record.Config.Quota)
 		}

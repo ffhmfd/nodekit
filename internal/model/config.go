@@ -31,26 +31,27 @@ type Reality struct {
 	Target     string `json:"target"`
 }
 type Config struct {
-	Schema           int              `json:"schema"`
-	Revision         int64            `json:"revision"`
-	Name             string           `json:"name"`
-	DisplayMode      string           `json:"display_mode,omitempty"`
-	CountryCode      string           `json:"country_code,omitempty"`
-	ManagedDNS       bool             `json:"managed_dns,omitempty"`
-	Domain           string           `json:"domain"`
-	Address          string           `json:"address"`
-	IPv6             bool             `json:"ipv6"`
-	IPv6Nodes        *IPv6NodesConfig `json:"ipv6_nodes,omitempty"`
-	Protocols        []Protocol       `json:"protocols"`
-	SubscriptionPort int              `json:"subscription_port"`
-	SubscriptionMode string           `json:"subscription_mode,omitempty"`
-	Quota            int64            `json:"quota"`
-	Expiry           *time.Time       `json:"expiry,omitempty"`
-	ResetDay         int              `json:"reset_day"`
-	ResetHour        int              `json:"reset_hour"`
-	Token            string           `json:"token"`
-	Reality          Reality          `json:"reality"`
-	CertID           string           `json:"cert_id,omitempty"`
+	Schema            int              `json:"schema"`
+	Revision          int64            `json:"revision"`
+	Name              string           `json:"name"`
+	DisplayMode       string           `json:"display_mode,omitempty"`
+	CountryCode       string           `json:"country_code,omitempty"`
+	ManagedDNS        bool             `json:"managed_dns,omitempty"`
+	Domain            string           `json:"domain"`
+	Address           string           `json:"address"`
+	IPv6              bool             `json:"ipv6"`
+	IPv6Nodes         *IPv6NodesConfig `json:"ipv6_nodes,omitempty"`
+	Protocols         []Protocol       `json:"protocols"`
+	SubscriptionPort  int              `json:"subscription_port"`
+	SubscriptionMode  string           `json:"subscription_mode,omitempty"`
+	Quota             int64            `json:"quota"`
+	TrafficMultiplier int              `json:"traffic_multiplier,omitempty"`
+	Expiry            *time.Time       `json:"expiry,omitempty"`
+	ResetDay          int              `json:"reset_day"`
+	ResetHour         int              `json:"reset_hour"`
+	Token             string           `json:"token"`
+	Reality           Reality          `json:"reality"`
+	CertID            string           `json:"cert_id,omitempty"`
 }
 
 func (c Config) Clone() Config {
@@ -148,6 +149,9 @@ func (c Config) Validate() error {
 	}
 	if c.Quota < 0 || c.ResetDay < 1 || c.ResetDay > 31 || c.ResetHour < 0 || c.ResetHour > 23 {
 		return errors.New("invalid quota/reset time")
+	}
+	if c.TrafficMultiplier < 0 || c.TrafficMultiplier > 2 {
+		return errors.New("traffic_multiplier must be 1 or 2 (0 defaults to 1)")
 	}
 	b, e := base64.RawURLEncoding.DecodeString(c.Token)
 	if e != nil || len(b) < 32 {

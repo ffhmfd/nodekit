@@ -47,7 +47,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		return 0
 	}
 	if args[0] == "capabilities" {
-		if e := json.NewEncoder(out).Encode(capabilities{SubscriptionModes: []string{"direct", "cloudflare"}, Features: []string{"node-names-v1", "managed-dns-v1", "purge-v1", "interactive-cancel-v1", "ipv6-nodes-v1", "ddns-cname-v1"}}); e != nil {
+		if e := json.NewEncoder(out).Encode(capabilities{SubscriptionModes: []string{"direct", "cloudflare"}, Features: []string{"node-names-v1", "managed-dns-v1", "purge-v1", "interactive-cancel-v1", "ipv6-nodes-v1", "ddns-cname-v1", "traffic-multiplier-v1"}}); e != nil {
 			fmt.Fprintln(errOut, e)
 			return 1
 		}
@@ -135,7 +135,8 @@ func execute(ctx context.Context, p paths, args []string, in io.Reader, out io.W
 		}
 		loc, _ := time.LoadLocation("Asia/Shanghai")
 		fmt.Fprintf(out, "订阅模式: %s\n节点连接地址: %s\n订阅端口: %d\n", r.Config.EffectiveSubscriptionMode(), r.Config.NodeAddress(), r.Config.SubscriptionPort)
-		fmt.Fprintf(out, "%s\n已用上传: %d B\n已用下载: %d B\n额度: %d B（仅展示）\n每月 %d 日 %02d:00 北京时间清零\n下次清零: %s\n最近采集: %s\n", r.Config.Name, r.Meter.Upload, r.Meter.Download, r.Config.Quota, r.Config.ResetDay, r.Config.ResetHour, r.Meter.Next.In(loc).Format("2006-01-02 15:04"), r.Meter.LastSample.In(loc).Format("2006-01-02 15:04:05"))
+		upload, download := r.Config.TrafficUsage(r.Meter.Upload, r.Meter.Download)
+		fmt.Fprintf(out, "%s\n流量计量: %s\n已用上传: %d B\n已用下载: %d B\n已用合计: %d B\n额度: %d B（仅展示）\n每月 %d 日 %02d:00 北京时间清零\n下次清零: %s\n最近采集: %s\n", r.Config.Name, trafficDescription(r.Config), upload, download, model.TrafficTotal(upload, download), r.Config.Quota, r.Config.ResetDay, r.Config.ResetHour, r.Meter.Next.In(loc).Format("2006-01-02 15:04"), r.Meter.LastSample.In(loc).Format("2006-01-02 15:04:05"))
 		if r.Config.Expiry != nil {
 			fmt.Fprintln(out, "到期:", r.Config.Expiry.In(loc).Format("2006-01-02 15:04"))
 		}
@@ -306,9 +307,14 @@ func editWithIPv6Deps(ctx context.Context, p paths, args []string, out io.Writer
 			c = imported
 		} else if args[1] == "set" {
 			if len(args) != 4 {
-				return errors.New("config set quota|expiry|reset|name|domain|address|subscription-mode|subscription-port <值>")
+				return errors.New("config set quota|traffic-multiplier|expiry|reset|name|domain|address|subscription-mode|subscription-port <值>")
 			}
 			switch args[2] {
+			case "traffic-multiplier":
+				if args[3] != "1" && args[3] != "2" {
+					return errors.New("流量计量倍率只能是 1 或 2")
+				}
+				c.TrafficMultiplier, _ = strconv.Atoi(args[3])
 			case "country", "name-style", "reality-sni", "reality-target":
 				if e := applyAdvancedSetting(ctx, &c, args[2], args[3], nil); e != nil {
 					return e
@@ -468,7 +474,7 @@ func editWithIPv6Deps(ctx context.Context, p paths, args []string, out io.Writer
 	}
 	commitRequirement, abortRequirement := func() error { return nil }, func() error { return nil }
 	if p.Root == "/" && os.Geteuid() == 0 {
-		commitRequirement, abortRequirement, e = beginIPv6Requirement(p, old, c)
+		commitRequirement, abortRequirement, e = beginConfigRequirements(p, old, c)
 		if e != nil {
 			return e
 		}
@@ -530,6 +536,9 @@ func editWithIPv6Deps(ctx context.Context, p paths, args []string, out io.Writer
 		return e
 	}
 	fmt.Fprintln(out, "配置已更新")
+	if old.EffectiveTrafficMultiplier() != c.EffectiveTrafficMultiplier() || (len(args) == 4 && args[0] == "config" && args[1] == "set" && args[2] == "traffic-multiplier") {
+		fmt.Fprintf(out, "流量计量: %s；整个当前周期按此倍率显示，请在客户端刷新订阅\n", trafficDescription(c))
+	}
 	return nil
 }
 func difference(a, b []platform.Binding) []platform.Binding {

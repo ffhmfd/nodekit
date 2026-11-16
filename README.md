@@ -28,7 +28,7 @@ Linux VPS 节点管理工具：Bash 安装入口、Go 中文向导和独立 miho
 
 ```bash
 bash scripts/build.sh test ./...
-bash scripts/package.sh v0.5.0
+bash scripts/package.sh v0.6.0
 ```
 
 构建缓存和发布包默认存于源码目录的上一级，分别为 `cache/`、`modules/`、`tmp/`、`dist/`。可以设置 `NODEKIT_BUILD_ROOT`。本项目开发优先在 VPS 的专用临时目录进行构建。
@@ -42,9 +42,9 @@ bash scripts/package.sh v0.5.0
 repo=ffhmfd/nodekit
 curl -fLsS --proto '=https' --proto-redir '=https' "https://github.com/$repo/releases/latest/download/install.sh" -o install.sh
 sudo bash install.sh --repo "$repo"
-# 可用 --version v0.5.0 固定版本。
+# 可用 --version v0.6.0 固定版本。
 # 离线安装仍支持：
-sudo bash install.sh --file nodekit-v0.5.0-linux-amd64.tar.gz --sha256 <可信的SHA256>
+sudo bash install.sh --file nodekit-v0.6.0-linux-amd64.tar.gz --sha256 <可信的SHA256>
 sudo nodekit setup
 ```
 
@@ -162,6 +162,8 @@ sudo nodekit protocol enable tuic
 sudo nodekit protocol port hy2 25444
 sudo nodekit protocol rotate ss2022
 sudo nodekit config set quota 500GB
+sudo nodekit config set traffic-multiplier 2 # 整个当前周期按2倍用量显示
+sudo nodekit config set traffic-multiplier 1 # 恢复原始代理用量
 sudo nodekit config set expiry '2026-12-31 18:00'
 sudo nodekit config set reset '15@8'     # 每月15日北京时间08:00
 sudo nodekit usage reset
@@ -230,6 +232,10 @@ IPv4 节点名称、订阅 URL 和 Token 保持不变；新增节点名称追加
 
 ## 流量与时间语义
 
+- 菜单 **25 流量计量方式** 可自由切换 **1倍（原始代理用量）** 和 **2倍（代理用量 × 2，收发合计估算）**，旧配置及新安装默认1倍。也可使用 `nodekit config set traffic-multiplier 1|2`；设置保存后重启仍保留。
+- 倍率作用于**整个当前周期**的上传和下载显示，原始计数始终保留。例如原始已用100GB、额度1000GB，切为2倍显示200/1000GB，切回1倍恢复100/1000GB；**额度不乘倍率**。手动及每月清零后沿用所选倍率。
+- 管理器状态与完整/纯节点订阅的用量采用同一倍率，客户端需**刷新订阅**后更新。这只影响订阅用量显示，不改变客户端自身实时速度或连接计数。2倍是代理收发量估算，不是网卡实测；例如下载1GB文件计约2GB。内部管理接口和数据库仍保存原始计数。
+- 新版 `capabilities` 包含 `traffic-multiplier-v1`。2倍配置及其待恢复操作要求支持该能力的程序；需要回滚到旧版时先恢复1倍并完成待恢复操作。
 - 所有业务日期使用 `Asia/Shanghai`；保留 VPS 自己的系统时区。
 - 每月指定日不存在时，取当月最后一天同一小时。修改安排从未来第一个边界生效，手动清零不改变定时安排。
 - 读取专用 mihomo 进程的累计计数，不依赖仅存活连接的列表；SSH、其他代理、网站和订阅 HTTP 服务不计入。

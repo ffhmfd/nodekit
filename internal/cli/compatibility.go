@@ -42,6 +42,9 @@ func checkReleaseCompatibility(ctx context.Context, c model.Config, binary strin
 	if model.IsDomainAddress(c.Address) {
 		required["ddns-cname-v1"] = true
 	}
+	if c.EffectiveTrafficMultiplier() == 2 {
+		required["traffic-multiplier-v1"] = true
+	}
 	if c.EffectiveSubscriptionMode() == "direct" && len(required) == 0 {
 		return nil
 	}
@@ -63,7 +66,7 @@ func checkReleaseCompatibility(ctx context.Context, c model.Config, binary strin
 			if len(required) == 0 {
 				return nil
 			}
-			return errors.New("目标程序不支持现有DNS/DDNS/名称/IPv6/卸载状态，拒绝降级")
+			return errors.New("目标程序不支持现有DNS/DDNS/名称/IPv6/流量计量/卸载状态，拒绝降级")
 		}
 	}
 	return errors.New("目标程序不支持当前订阅模式；如需降级，请先显式切回 direct")
@@ -141,6 +144,9 @@ func saveRetainedRequirements(p paths, m *hostManifest, c model.Config) error {
 	}
 	if model.IsDomainAddress(c.Address) {
 		features["ddns-cname-v1"] = true
+	}
+	if c.EffectiveTrafficMultiplier() == 2 {
+		features["traffic-multiplier-v1"] = true
 	}
 	m.RequiredFeatures = nil
 	for f := range features {

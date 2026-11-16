@@ -10,7 +10,7 @@ import (
 )
 
 func abortConfigChange(p paths, old, next model.Config, undoRules, undoRequirement func() error) error {
-	if old.IPv6Nodes != nil || next.IPv6Nodes != nil {
+	if old.IPv6Nodes != nil || next.IPv6Nodes != nil || old.EffectiveTrafficMultiplier() == 2 || next.EffectiveTrafficMultiplier() == 2 {
 		// GET /config may still show the old committed revision after a failed
 		// rollback. It does not establish that the candidate's sockets/journal
 		// are gone, so keep both guards until the manager confirms no operation.
@@ -21,7 +21,7 @@ func abortConfigChange(p paths, old, next model.Config, undoRules, undoRequireme
 			return errors.Join(err, cloudflare.ErrUncertain)
 		}
 		if status.OperationPhase != "" || status.Operation != nil {
-			return errors.Join(errors.New("IPv6配置尚有未完成操作；请用当前版本恢复后再清理能力及防火墙记录"), cloudflare.ErrUncertain)
+			return errors.Join(errors.New("配置尚有未完成操作；请用当前版本恢复后再清理能力及防火墙记录"), cloudflare.ErrUncertain)
 		}
 	}
 	if err := undoRules(); err != nil {
